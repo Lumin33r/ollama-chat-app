@@ -756,6 +756,16 @@ A comprehensive guide for local development, git workflow, service testing, and 
 
   # In frontend terminal (Terminal 2)
   Ctrl+C  # Stop Vite server
+  # Stop the Ollama service gracefully
+  pkill ollama
+
+  # Verify it stopped
+  ps aux | grep ollama
+  # Should show no ollama processes
+
+  # Alternative: If running in foreground (you started with 'ollama serve')
+  # Press Ctrl+C in the terminal where it's running
+
   ```
 
 - [ ] **Save VS Code Workspace State**
