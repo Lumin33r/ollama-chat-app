@@ -1,11 +1,14 @@
 # Ollama Chat App - Development & Deployment Guide
 
-A comprehensive guide for local development, git workflow, and AWS deployment of the Ollama Chat application.
+A comprehensive guide for local development, git workflow, service testing, and AWS deployment of the Ollama Chat application.
 
 ## Table of Contents
 
 - [Quick Start - Daily Development Routine](#quick-start---daily-development-routine)
+  - [Service Testing and Verification](#service-testing-and-verification)
 - [Initial Project Setup](#initial-project-setup)
+  - [Option A: Clone Existing Repository](#option-a-clone-existing-repository)
+  - [Option B: Initialize New Repository from Scratch](#option-b-initialize-new-repository-from-scratch)
 - [Local Development Environment](#local-development-environment)
 - [Frontend Development Guide](#frontend-development-guide)
 - [Git Workflow & Best Practices](#git-workflow--best-practices)
@@ -21,7 +24,9 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
 ### **Start of Development Session**
 
 #### **1. System Startup & Prerequisites**
+
 - [ ] **Start Docker Desktop**
+
   ```bash
   #From Windows Start Menu, start Docker Desktop
   # Linux: Start Docker daemon
@@ -34,6 +39,7 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 - [ ] **Open VS Code in Project Directory**
+
   ```bash
   cd ~/codeplatoon/projects/ollama-chat-app
   code .
@@ -56,7 +62,9 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
     - Docker
 
 #### **2. Update Local Repository**
+
 - [ ] **Sync with Remote Repository**
+
   ```bash
   # Check current status
   git status
@@ -74,6 +82,7 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 - [ ] **Check for Conflicts or Issues**
+
   ```bash
   # Verify working directory is clean
   git status
@@ -83,7 +92,9 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 #### **3. Create or Switch to Feature Branch**
+
 - [ ] **Determine What You're Working On**
+
   ```bash
   # Check existing branches
   git branch -a
@@ -104,7 +115,9 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 #### **4. Start Development Services**
+
 - [ ] **Backend Setup (Terminal 1)**
+
   ```bash
   cd backend
 
@@ -126,6 +139,7 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 - [ ] **Frontend Setup (Terminal 2)**
+
   ```bash
   cd frontend
 
@@ -141,6 +155,7 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 - [ ] **Verify Services are Running**
+
   ```bash
   # In Terminal 3:
   # Test backend
@@ -158,7 +173,9 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
 ### **During Development Session**
 
 #### **5. Choose Files to Work On**
+
 - [ ] **Review Your Task/Issue**
+
   ```bash
   # Check GitHub issues or project board
   # Understand requirements before coding
@@ -167,12 +184,14 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 - [ ] **Frontend Work**: Navigate to files
+
   - `frontend/src/components/` - UI components
   - `frontend/src/App.jsx` - Main app logic
   - `frontend/src/index.css` - Global styles
   - `frontend/vite.config.js` - Build configuration
 
 - [ ] **Backend Work**: Navigate to files
+
   - `backend/app.py` - API endpoints
   - `backend/ollama_connector.py` - Business logic
   - `backend/requirements.txt` - Dependencies
@@ -182,7 +201,9 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   - Keep related files side-by-side
 
 #### **6. Efficient VS Code Setup**
+
 - [ ] **File Navigation**
+
   ```
   Ctrl+P          # Quick file opener
   Ctrl+Shift+F    # Search across all files
@@ -192,6 +213,7 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 - [ ] **Editor Management**
+
   ```
   Ctrl+\          # Split editor
   Ctrl+W          # Close editor
@@ -209,12 +231,15 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 #### **7. Development Workflow**
+
 - [ ] **Make Incremental Changes**
+
   - Edit one feature/fix at a time
   - Save frequently (`Ctrl+S`)
   - Test changes immediately in browser (auto-reload)
 
 - [ ] **Check Changes as You Go**
+
   ```bash
   # In Terminal 3:
   # View current changes
@@ -226,21 +251,332 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 - [ ] **Test Continuously**
+
   - Frontend: Check browser for UI changes
   - Backend: Test API with curl or browser
   - Integration: Verify frontend-backend communication
 
   ```bash
   # Quick API test
-  curl -X POST http://localhost:8000/api/chat \
+  curl -X POST http://localhost:8000/chat \
     -H "Content-Type: application/json" \
     -d '{"prompt": "test message", "session_id": "test"}'
   ```
 
-### **Testing Your Changes**
+### **Service Testing and Verification**
 
-#### **8. Pre-Commit Testing**
+#### **8A. Ollama Service Testing**
+
+- [ ] **Start Ollama Service**
+
+  ```bash
+  # Start Ollama service in background
+  ollama serve &
+
+  # Or if running in Docker
+  docker run -d \
+    -p 11434:11434 \
+    --name ollama \
+    ollama/ollama
+
+  # Pull the model if not already available
+  ollama pull llama2
+  ```
+
+- [ ] **Verify Ollama Service is Running**
+
+  ```bash
+  # Check Ollama service health
+  curl http://localhost:11434/api/tags
+
+  # Expected output: JSON with list of available models
+  # {"models": [{"name": "llama2:latest", ...}]}
+
+  # Test basic chat functionality
+  curl -X POST http://localhost:11434/api/generate \
+    -H "Content-Type: application/json" \
+    -d '{
+      "model": "llama2",
+      "prompt": "Hello, how are you?",
+      "stream": false
+    }'
+
+  # Expected: JSON response with model output
+  ```
+
+- [ ] **Test Model Availability**
+
+  ```bash
+  # List all available models
+  ollama list
+
+  # Expected output:
+  # NAME          ID          SIZE    MODIFIED
+  # llama2:latest abc123...   3.8 GB  2 hours ago
+  ```
+
+#### **8B. Backend Flask API Testing**
+
+- [ ] **Verify Backend is Running**
+
+  ```bash
+  cd backend
+  source venv/bin/activate
+  python app.py
+
+  # Should see output:
+  # * Running on http://0.0.0.0:8000
+  # * Debug mode: on
+  ```
+
+- [ ] **Test Backend Health Endpoint**
+
+  ```bash
+  # In a separate terminal
+  curl http://localhost:8000/health
+
+  # Expected response:
+  # {"status":"healthy"}
+
+  # Check response code (should be 200)
+  curl -I http://localhost:8000/health
+  ```
+
+- [ ] **Test Backend Chat Endpoint**
+
+  ```bash
+  # Test basic chat functionality
+  curl -X POST http://localhost:8000/chat \
+    -H "Content-Type: application/json" \
+    -d '{
+      "prompt": "What is artificial intelligence?",
+      "session_id": "test-session-123"
+    }'
+
+  # Expected: JSON response with AI-generated text
+  # {"response": "Artificial intelligence is...", "session_id": "test-session-123"}
+
+  # Test with conversation context
+  curl -X POST http://localhost:8000/chat \
+    -H "Content-Type: application/json" \
+    -d '{
+      "prompt": "Tell me more about that",
+      "session_id": "test-session-123",
+      "context": "Previous conversation about AI..."
+    }'
+  ```
+
+- [ ] **Test Error Handling**
+
+  ```bash
+  # Test with missing prompt
+  curl -X POST http://localhost:8000/chat \
+    -H "Content-Type: application/json" \
+    -d '{
+      "session_id": "test-session-123"
+    }'
+
+  # Expected: 400 Bad Request with error message
+
+  # Test with invalid JSON
+  curl -X POST http://localhost:8000/chat \
+    -H "Content-Type: application/json" \
+    -d 'invalid json'
+
+  # Expected: 400 Bad Request
+  ```
+
+#### **8C. Backend Unit Testing (ollama_connector.py)**
+
+- [ ] **Run Unit Tests with pytest**
+
+  ```bash
+  cd backend
+  source venv/bin/activate
+
+  # Install pytest if not already installed
+  pip install pytest pytest-mock
+
+  # Run all tests
+  pytest tests/ -v
+
+  # Run specific test file
+  pytest tests/test_ollama_connector.py -v
+
+  # Run with coverage report
+  pytest tests/ --cov=. --cov-report=term-missing
+  ```
+
+- [ ] **Manual Testing of ollama_connector Module**
+
+  ```bash
+  # Test in Python interactive shell
+  cd backend
+  source venv/bin/activate
+  python
+
+  # In Python shell:
+  >>> from ollama_connector import OllamaConnector
+  >>> connector = OllamaConnector()
+  >>>
+  >>> # Test list_models
+  >>> models = connector.list_models()
+  >>> print(models)
+  # Expected: ['llama2:latest', ...]
+  >>>
+  >>> # Test chat method
+  >>> response = connector.chat("What is 2+2?")
+  >>> print(response)
+  # Expected: Text response from Ollama
+  >>>
+  >>> # Test chat with context
+  >>> response = connector.chat(
+  ...     "What did I just ask you?",
+  ...     context="User previously asked about 2+2"
+  ... )
+  >>> print(response)
+  # Expected: Reference to previous math question
+  >>>
+  >>> exit()
+  ```
+
+- [ ] **Test Error Conditions**
+
+  ```bash
+  # Stop Ollama service to test error handling
+  pkill ollama
+
+  # Run connector test - should handle gracefully
+  python
+  >>> from ollama_connector import OllamaConnector
+  >>> connector = OllamaConnector()
+  >>> response = connector.chat("test")
+  # Expected: Error message or exception handling
+  >>> exit()
+
+  # Restart Ollama service
+  ollama serve &
+  ```
+
+#### **8D. Frontend Testing**
+
+- [ ] **Start Frontend Development Server**
+
+  ```bash
+  cd frontend
+  npm install  # If dependencies not installed
+  npm run dev
+
+  # Expected output:
+  # VITE v5.4.21  ready in XXX ms
+  # ➜  Local:   http://localhost:3000/
+  # ➜  Network: use --host to expose
+  ```
+
+- [ ] **Verify Frontend is Accessible**
+
+  ```bash
+  # Test frontend loads
+  curl -I http://localhost:3000
+
+  # Expected: 200 OK with HTML content-type
+
+  # Open in browser
+  xdg-open http://localhost:3000  # Linux
+  # or
+  open http://localhost:3000      # macOS
+  # or navigate manually in browser
+  ```
+
+- [ ] **Browser Console Testing**
+
+  - Open browser DevTools (F12)
+  - Check Console tab for errors
+  - Verify no CORS errors
+  - Check Network tab for API calls
+  - Test chat functionality by sending messages
+
+- [ ] **Frontend Linting and Build Tests**
+
+  ```bash
+  cd frontend
+
+  # Run ESLint
+  npm run lint
+
+  # Fix auto-fixable issues
+  npm run lint -- --fix
+
+  # Build for production (tests bundling)
+  npm run build
+
+  # Expected: dist/ folder created with compiled assets
+
+  # Preview production build
+  npm run preview
+  # Opens at http://localhost:4173
+  ```
+
+#### **8E. Integration Testing**
+
+- [ ] **End-to-End User Flow Testing**
+
+  1. **Start All Services** (Ollama, Backend, Frontend)
+  2. **Open Frontend in Browser** (http://localhost:3000)
+  3. **Test Chat Interface:**
+     - Enter a message in the chat input
+     - Verify message appears in chat history
+     - Verify AI response is received and displayed
+     - Check response time (should be reasonable)
+  4. **Test Multiple Messages:**
+     - Send follow-up questions
+     - Verify context is maintained across conversation
+     - Check session_id is preserved
+  5. **Test Error Scenarios:**
+     - Stop Ollama service mid-conversation
+     - Verify frontend shows appropriate error message
+     - Restart Ollama and verify recovery
+
+- [ ] **Browser DevTools Verification**
+
+  ```
+  F12 to open DevTools
+
+  Console Tab:
+    - No red errors
+    - Check for warnings that need attention
+
+  Network Tab:
+    - Filter: XHR/Fetch
+    - Verify POST to /api/chat returns 200 OK
+    - Inspect request/response payloads
+    - Check response times
+
+  Application Tab:
+    - Check localStorage for session data
+    - Verify sessionStorage if used
+  ```
+
+- [ ] **CORS and Cross-Origin Testing**
+
+  ```bash
+  # Test CORS headers from backend
+  curl -X OPTIONS http://localhost:8000/api/chat \
+    -H "Origin: http://localhost:3000" \
+    -H "Access-Control-Request-Method: POST" \
+    -v
+
+  # Should see:
+  # Access-Control-Allow-Origin: http://localhost:3000
+  # Access-Control-Allow-Methods: POST, OPTIONS
+  ```
+
+### **Testing Your Changes (Pre-Commit)**
+
+#### **8F. Pre-Commit Testing Checklist**
+
 - [ ] **Frontend Testing**
+
   ```bash
   cd frontend
 
@@ -258,30 +594,40 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 - [ ] **Backend Testing**
+
   ```bash
   cd backend
   source venv/bin/activate
 
-  # Run tests (if available)
-  python -m pytest tests/
+  # Run unit tests
+  python -m pytest tests/ -v
 
   # Check imports work
   python -c "import app; print('Backend OK')"
 
   # Manual API testing
   curl http://localhost:8000/health
+
+  # Test chat endpoint
+  curl -X POST http://localhost:8000/api/chat \
+    -H "Content-Type: application/json" \
+    -d '{"prompt": "test", "session_id": "test"}'
   ```
 
 - [ ] **Integration Testing**
-  - Test user flows in browser
+  - Test complete user flows in browser
   - Check browser console for errors
   - Verify API calls in Network tab
   - Test responsive design (mobile/desktop)
+  - Verify all services communicate correctly
+  - Test edge cases and error scenarios
 
 ### **Committing Your Work**
 
 #### **9. Stage and Review Changes**
+
 - [ ] **Review What Changed**
+
   ```bash
   # See all changes
   git status
@@ -294,6 +640,7 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 - [ ] **Stage Specific Files**
+
   ```bash
   # Stage specific files (RECOMMENDED)
   git add frontend/src/components/NewComponent.jsx
@@ -308,6 +655,7 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 - [ ] **Review Before Committing**
+
   ```bash
   # Double-check staged changes
   git diff --staged
@@ -318,7 +666,9 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 #### **10. Commit with Good Message**
+
 - [ ] **Write Descriptive Commit Message**
+
   ```bash
   # Use conventional commit format: <type>: <description>
 
@@ -342,6 +692,7 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 - [ ] **Verify Commit**
+
   ```bash
   # Check commit was created
   git log --oneline -1
@@ -353,7 +704,9 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
 ### **Syncing Your Work**
 
 #### **11. Push to Remote Repository**
+
 - [ ] **Push Your Branch**
+
   ```bash
   # First time pushing this branch
   git push -u origin feature/your-feature-name
@@ -366,6 +719,7 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 - [ ] **Handle Push Rejections**
+
   ```bash
   # If remote has changes you don't have
   git pull --rebase origin feature/your-feature-name
@@ -378,6 +732,7 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
 ### **End of Session Checklist**
 
 #### **12. Create Pull Request (if ready)**
+
 - [ ] **Open GitHub PR**
   - Go to repository on GitHub
   - Click "Compare & pull request" button
@@ -391,7 +746,9 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   - Add labels (feature, bug, etc.)
 
 #### **13. Clean Up (Optional)**
+
 - [ ] **Stop Development Services**
+
   ```bash
   # In backend terminal (Terminal 1)
   Ctrl+C  # Stop Flask server
@@ -402,6 +759,7 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
   ```
 
 - [ ] **Save VS Code Workspace State**
+
   - VS Code auto-saves workspace
   - Close VS Code or leave open for next session
 
@@ -416,6 +774,7 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
 ### **Next Session Quick Start**
 
 #### **14. Resume Development**
+
 - [ ] **Start Docker** (if needed)
 - [ ] **Open VS Code** in project folder
 - [ ] **Update main branch**
@@ -436,6 +795,7 @@ A comprehensive guide for local development, git workflow, and AWS deployment of
 ### **Quick Reference Commands**
 
 #### **Essential Git Commands**
+
 ```bash
 # Daily workflow
 git status                              # Check current state
@@ -467,6 +827,7 @@ git show HEAD                           # View last commit details
 ```
 
 #### **VS Code Keyboard Shortcuts**
+
 ```bash
 # Navigation
 Ctrl+P              # Quick open file
@@ -488,6 +849,7 @@ Ctrl+Shift+`        # New terminal
 ```
 
 #### **Development Server Commands**
+
 ```bash
 # Backend
 cd backend && source venv/bin/activate && python app.py
@@ -503,13 +865,24 @@ cd frontend && npm run build && npm run preview
 
 ## Initial Project Setup
 
-### **First Time Setup (New Developer)**
+### **Option A: Clone Existing Repository**
 
 #### **1. Clone and Initial Setup**
+
 ```bash
-# Clone the repository
-git clone https://github.com/CodePlatoon/ollama-chat-app.git
+# Clone the repository (use HTTPS or SSH)
+# HTTPS:
+git clone https://github.com/YOUR_USERNAME/ollama-chat-app.git
+# OR SSH (recommended if SSH keys configured):
+git clone git@github.com:YOUR_USERNAME/ollama-chat-app.git
+
 cd ollama-chat-app
+
+# Verify remote is set
+git remote -v
+# Should show:
+# origin  https://github.com/YOUR_USERNAME/ollama-chat-app.git (fetch)
+# origin  https://github.com/YOUR_USERNAME/ollama-chat-app.git (push)
 
 # Check project structure
 tree -I 'node_modules|venv|__pycache__|.git' -L 3
@@ -525,6 +898,7 @@ tree -I 'node_modules|venv|__pycache__|.git' -L 3
 ```
 
 #### **2. Initial Git Configuration**
+
 ```bash
 # Configure git (if not done globally)
 git config user.name "Your Name"
@@ -538,9 +912,202 @@ git log --oneline -5
 git checkout -b feature/your-name-setup
 ```
 
+---
+
+### **Option B: Initialize New Repository from Scratch**
+
+If you're starting a new project without cloning:
+
+#### **1. Initialize Git Repository**
+
+```bash
+# Navigate to project directory
+cd ~/codeplatoon/projects/ollama-chat-app
+
+# Initialize git repository
+git init
+
+# Check status
+git status
+# Should show: On branch main (or master)
+# No commits yet
+```
+
+#### **2. Configure Git**
+
+```bash
+# Set your identity (globally or per-repository)
+git config --global user.name "Your Name"
+git config --global user.email "your.email@example.com"
+
+# Set default branch name to main
+git config --global init.defaultBranch main
+
+# Set default editor (optional)
+git config --global core.editor "code --wait"  # VS Code
+# OR
+git config --global core.editor "nano"         # Nano
+
+# Enable color output
+git config --global color.ui auto
+
+# Verify configuration
+git config --list
+```
+
+#### **3. Create .gitignore File**
+
+Before your first commit, create a `.gitignore` file:
+
+```bash
+# Create .gitignore at project root
+cat > .gitignore << 'EOF'
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+backend/venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+.pnp.*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
+.env.production
+.env.development
+
+# IDE & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker
+.dockerignore
+
+# Testing & Coverage
+coverage/
+.nyc_output/
+*.lcov
+.pytest_cache/
+
+# Build artifacts
+dist/
+build/
+*.egg
+out/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+EOF
+
+# Verify .gitignore was created
+cat .gitignore
+```
+
+#### **4. Make Your First Commit**
+
+```bash
+# Stage all files
+git add .
+
+# Review what will be committed
+git status
+
+# Create first commit
+git commit -m "feat: initial commit - ollama chat application
+
+- Add Flask backend with Ollama integration
+- Add React frontend with Vite build system
+- Add Docker configuration for containerization
+- Add nginx configuration for production deployment
+- Add comprehensive documentation"
+
+# Verify commit
+git log --oneline -1
+```
+
+#### **5. Connect to GitHub Remote**
+
+##### **Create GitHub Repository First:**
+
+1. Go to https://github.com
+2. Click "New Repository" (+ icon in top right)
+3. Name: `ollama-chat-app`
+4. Description: "AI-powered chat application using Ollama"
+5. **DO NOT** initialize with README, .gitignore, or license
+6. Click "Create repository"
+
+##### **Add Remote and Push:**
+
+```bash
+# Add GitHub remote (HTTPS)
+git remote add origin https://github.com/YOUR_USERNAME/ollama-chat-app.git
+
+# OR add GitHub remote (SSH - recommended if SSH keys configured)
+git remote add origin git@github.com:YOUR_USERNAME/ollama-chat-app.git
+
+# Verify remote was added
+git remote -v
+
+# Rename branch to main (if needed)
+git branch -M main
+
+# Push to GitHub (first time)
+git push -u origin main
+
+# Verify push succeeded
+git status
+# Should show: Your branch is up to date with 'origin/main'
+```
+
+---
+
+### **First Time Setup (New Developer)**
+
 #### **3. Prerequisites Installation**
 
 **System Requirements:**
+
 ```bash
 # Install Node.js 18+ (for frontend)
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
@@ -573,6 +1140,7 @@ uv --version      # Should be 0.4+
 ### **Backend Development Setup**
 
 #### **1. Python Environment Setup**
+
 ```bash
 # Navigate to backend directory
 cd backend
@@ -589,6 +1157,7 @@ python -c "import flask; print('Flask version:', flask.__version__)"
 ```
 
 #### **2. Environment Configuration**
+
 ```bash
 # Create environment variables file
 cat > .env << 'EOF'
@@ -610,6 +1179,7 @@ source .env
 ```
 
 #### **3. Start Backend Server**
+
 ```bash
 # Method 1: Direct Flask development server
 python app.py
@@ -628,6 +1198,7 @@ curl http://localhost:8000/health
 ### **Frontend Development Setup**
 
 #### **1. Node.js Environment Setup**
+
 ```bash
 # Open new terminal and navigate to frontend
 cd frontend
@@ -640,6 +1211,7 @@ npm list --depth=0
 ```
 
 #### **2. Frontend Configuration**
+
 ```bash
 # Check Vite configuration
 cat vite.config.js
@@ -649,6 +1221,7 @@ cat vite.config.js
 ```
 
 #### **3. Start Frontend Development Server**
+
 ```bash
 # Start Vite development server
 npm run dev
@@ -664,6 +1237,7 @@ curl http://localhost:3000
 ### **Full Stack Development**
 
 #### **1. Start Both Services (Recommended)**
+
 ```bash
 # Terminal 1: Backend
 cd backend
@@ -679,6 +1253,7 @@ npm run dev
 ```
 
 #### **2. Verify Full Stack Integration**
+
 ```bash
 # Test backend health
 curl http://localhost:8000/health
@@ -702,6 +1277,7 @@ xdg-open http://localhost:3000
 The frontend is a modern React application built with Vite, featuring a ChatGPT-like interface for AI conversations.
 
 #### **Technology Stack:**
+
 - **React 18**: Modern functional components with hooks
 - **Vite**: Fast build tool and development server
 - **Axios**: HTTP client for API communication
@@ -734,8 +1310,10 @@ frontend/
 ### **Component Architecture**
 
 #### **App.jsx - Main Application**
+
 **Purpose**: Root component managing global state and layout
 **Responsibilities**:
+
 - **State Management**: Manages conversations, current conversation, loading states
 - **Data Persistence**: Saves/loads conversations from localStorage
 - **Component Orchestration**: Renders and coordinates child components
@@ -749,14 +1327,16 @@ const [loading, setLoading] = useState(false);
 
 // localStorage integration for persistence
 useEffect(() => {
-  const saved = localStorage.getItem('ollama-conversations');
+  const saved = localStorage.getItem("ollama-conversations");
   if (saved) setConversations(JSON.parse(saved));
 }, []);
 ```
 
 #### **Sidebar.jsx - Navigation Component**
+
 **Purpose**: Conversation history and navigation management
 **Key Features**:
+
 - **Conversation List**: Displays all saved conversations with timestamps
 - **Active State Management**: Highlights currently selected conversation
 - **New Chat Creation**: Provides interface to start new conversations
@@ -768,15 +1348,17 @@ const Sidebar = ({
   conversations,
   currentConversation,
   onConversationSelect,
-  onNewChat
+  onNewChat,
 }) => {
   // Component logic for conversation management
 };
 ```
 
 #### **ChatInterface.jsx - Core Chat Component**
+
 **Purpose**: Main chat interface for message exchange
 **Responsibilities**:
+
 - **Message Display**: Renders conversation history with proper formatting
 - **Input Handling**: Manages message input with keyboard shortcuts
 - **API Communication**: Sends messages to Flask backend
@@ -787,6 +1369,7 @@ const Sidebar = ({
 ### **Development Workflow**
 
 #### **1. Starting Frontend Development**
+
 ```bash
 # Navigate to frontend directory
 cd frontend
@@ -802,6 +1385,7 @@ npm run dev
 ```
 
 #### **2. Development Server Features**
+
 ```bash
 # Available npm scripts:
 npm run dev      # Start development server with hot reload
@@ -817,6 +1401,7 @@ npm run lint     # Run ESLint for code quality
 ```
 
 #### **3. API Integration Pattern**
+
 The frontend communicates with the Flask backend through a proxy configuration:
 
 ```javascript
@@ -824,25 +1409,26 @@ The frontend communicates with the Flask backend through a proxy configuration:
 export default defineConfig({
   server: {
     proxy: {
-      '/api': {
-        target: 'http://localhost:8000',
+      "/api": {
+        target: "http://localhost:8000",
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, '')
-      }
-    }
-  }
+        rewrite: (path) => path.replace(/^\/api/, ""),
+      },
+    },
+  },
 });
 
 // Usage in components:
-const response = await axios.post('/api/chat', {
+const response = await axios.post("/api/chat", {
   message: userMessage,
-  conversation_id: currentConversationId
+  conversation_id: currentConversationId,
 });
 ```
 
 ### **Component Development Process**
 
 #### **1. Creating New Components**
+
 ```bash
 # Component creation workflow:
 mkdir -p src/components/NewComponent
@@ -855,22 +1441,19 @@ touch src/components/NewComponent/index.js
 
 ```jsx
 // NewComponent.jsx template
-import './NewComponent.css';
+import "./NewComponent.css";
 
 const NewComponent = ({ prop1, prop2, onAction }) => {
   // Component logic here
 
-  return (
-    <div className="new-component">
-      {/* Component JSX */}
-    </div>
-  );
+  return <div className="new-component">{/* Component JSX */}</div>;
 };
 
 export default NewComponent;
 ```
 
 #### **2. Styling Guidelines**
+
 ```css
 /* Component-specific CSS following BEM methodology */
 .new-component {
@@ -894,6 +1477,7 @@ export default NewComponent;
 ```
 
 #### **3. State Management Patterns**
+
 ```jsx
 // Local component state
 const [localState, setLocalState] = useState(initialValue);
@@ -910,18 +1494,14 @@ useEffect(() => {
 const ParentComponent = () => {
   const [sharedState, setSharedState] = useState();
 
-  return (
-    <ChildComponent
-      state={sharedState}
-      onStateChange={setSharedState}
-    />
-  );
+  return <ChildComponent state={sharedState} onStateChange={setSharedState} />;
 };
 ```
 
 ### **Testing & Quality Assurance**
 
 #### **1. Development Testing**
+
 ```bash
 # Manual testing workflow:
 npm run dev                    # Start dev server
@@ -937,6 +1517,7 @@ npm run preview               # Test production build
 ```
 
 #### **2. Code Quality Checks**
+
 ```bash
 # ESLint for code quality
 npm run lint                   # Check for linting errors
@@ -951,6 +1532,7 @@ npm run lint -- --fix         # Auto-fix fixable issues
 ```
 
 #### **3. Browser Compatibility Testing**
+
 ```bash
 # Test in multiple browsers:
 # - Chrome (primary development)
@@ -968,6 +1550,7 @@ npm run lint -- --fix         # Auto-fix fixable issues
 ### **Production Build Process**
 
 #### **1. Build Optimization**
+
 ```bash
 # Production build creates optimized bundle
 npm run build
@@ -985,6 +1568,7 @@ du -sh dist/                   # Check bundle size
 ```
 
 #### **2. Build Configuration**
+
 ```javascript
 // vite.config.js production optimizations
 export default defineConfig({
@@ -1007,6 +1591,7 @@ export default defineConfig({
 ### **Docker Integration**
 
 #### **1. Development Container**
+
 ```dockerfile
 # Development Dockerfile for consistent environment
 FROM node:18-alpine
@@ -1019,6 +1604,7 @@ CMD ["npm", "run", "dev", "--", "--host"]
 ```
 
 #### **2. Production Container**
+
 The production Dockerfile uses multi-stage builds for optimal image size:
 
 ```dockerfile
@@ -1043,6 +1629,7 @@ CMD ["nginx", "-g", "daemon off;"]
 ### **Deployment Considerations**
 
 #### **1. Environment Configuration**
+
 ```bash
 # Environment-specific builds:
 
@@ -1060,25 +1647,21 @@ docker build --build-arg VITE_API_URL="https://api.ollama-chat.com" -t frontend:
 ```
 
 #### **2. Performance Optimization**
+
 ```javascript
 // Code splitting for better performance
-const LazyComponent = React.lazy(() => import('./LazyComponent'));
+const LazyComponent = React.lazy(() => import("./LazyComponent"));
 
 // Memoization for expensive calculations
 const ExpensiveComponent = React.memo(({ data }) => {
-  const expensiveValue = useMemo(() =>
-    heavyCalculation(data), [data]
-  );
+  const expensiveValue = useMemo(() => heavyCalculation(data), [data]);
 
   return <div>{expensiveValue}</div>;
 });
 
 // Debounced input for better UX
 const DebouncedInput = ({ onSearch }) => {
-  const debouncedSearch = useMemo(
-    () => debounce(onSearch, 300),
-    [onSearch]
-  );
+  const debouncedSearch = useMemo(() => debounce(onSearch, 300), [onSearch]);
 
   return <input onChange={(e) => debouncedSearch(e.target.value)} />;
 };
@@ -1087,6 +1670,7 @@ const DebouncedInput = ({ onSearch }) => {
 ### **Troubleshooting Frontend Issues**
 
 #### **1. Development Server Issues**
+
 ```bash
 # Port already in use
 sudo lsof -ti:3000 | xargs kill -9
@@ -1103,6 +1687,7 @@ npm run dev
 ```
 
 #### **2. Build Issues**
+
 ```bash
 # Memory issues during build
 export NODE_OPTIONS="--max-old-space-size=4096"
@@ -1117,6 +1702,7 @@ npx tsc --noEmit              # Check types without emitting
 ```
 
 #### **3. API Integration Issues**
+
 ```bash
 # CORS issues in development
 # Check vite.config.js proxy configuration
@@ -1149,11 +1735,13 @@ proxy: {
 ### **Branch Strategy**
 
 #### **Main Branches:**
+
 - `main` - Production-ready code
 - `develop` - Integration branch for features
 - `staging` - Pre-production testing
 
 #### **Feature Branches:**
+
 - `feature/frontend-chat-interface`
 - `feature/backend-ollama-integration`
 - `feature/auth-system`
@@ -1163,6 +1751,7 @@ proxy: {
 ### **Daily Development Workflow**
 
 #### **1. Starting a New Development Session**
+
 ```bash
 # Update your local repository
 git fetch origin
@@ -1177,6 +1766,7 @@ git rebase main  # Keep branch up to date
 ```
 
 #### **2. Making Changes**
+
 ```bash
 # Check status before starting
 git status
@@ -1207,6 +1797,7 @@ Closes #42"
 ```
 
 #### **3. Good Commit Messages**
+
 ```bash
 # Format: <type>: <description>
 #
@@ -1231,6 +1822,7 @@ git commit -m "refactor: extract Ollama service into separate module"
 ```
 
 #### **4. Pushing and Pull Requests**
+
 ```bash
 # Push your branch
 git push origin feature/your-feature-name
@@ -1248,6 +1840,7 @@ git push -u origin feature/your-feature-name
 ### **Collaborative Development**
 
 #### **1. Handling Conflicts**
+
 ```bash
 # Update main branch
 git checkout main
@@ -1267,6 +1860,7 @@ git push --force-with-lease origin feature/your-feature-name
 ```
 
 #### **2. Code Review Process**
+
 ```bash
 # Before submitting PR:
 # 1. Test locally
@@ -1286,6 +1880,7 @@ git diff main..HEAD
 ### **Release Workflow**
 
 #### **1. Preparing Release**
+
 ```bash
 # Create release branch from main
 git checkout main
@@ -1305,6 +1900,7 @@ git push origin release/v1.2.0
 ```
 
 #### **2. Tagging Release**
+
 ```bash
 # After release is approved and merged:
 git checkout main
@@ -1337,6 +1933,7 @@ git push origin v1.2.0
 ### **Frontend Development**
 
 #### **1. Component Development**
+
 ```bash
 # Start frontend dev server
 cd frontend
@@ -1361,6 +1958,7 @@ git commit -m "feat: add NewComponent with real-time updates"
 ```
 
 #### **2. Frontend Testing & Building**
+
 ```bash
 # Development testing
 npm run dev     # Start dev server
@@ -1380,6 +1978,7 @@ docker run -p 3000:80 ollama-frontend:dev
 ### **Backend Development**
 
 #### **1. API Development**
+
 ```bash
 # Start backend dev server
 cd backend
@@ -1404,6 +2003,7 @@ git commit -m "feat: add conversation persistence to chat API"
 ```
 
 #### **2. Backend Testing & Containerization**
+
 ```bash
 # Install test dependencies
 uv pip install pytest pytest-flask
@@ -1422,6 +2022,7 @@ curl http://localhost:8000/health
 ### **Integration Testing**
 
 #### **1. Full Stack Testing**
+
 ```bash
 # Start both services
 # Terminal 1:
@@ -1438,6 +2039,7 @@ cd frontend && npm run dev
 ```
 
 #### **2. Container Integration Testing**
+
 ```bash
 # Build both containers
 docker build -t ollama-backend:test backend/
@@ -1471,6 +2073,7 @@ curl http://localhost:3000
 ### **Manual AWS Setup**
 
 #### **1. AWS Prerequisites**
+
 ```bash
 # Install AWS CLI v2
 curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
@@ -1489,6 +2092,7 @@ aws sts get-caller-identity
 ```
 
 #### **2. ECR Repository Setup**
+
 ```bash
 # Create ECR repositories
 aws ecr create-repository --repository-name ollama-chat-backend
@@ -1501,6 +2105,7 @@ aws ecr get-login-password --region us-east-1 | docker login --username AWS --pa
 ### **AMD64 Deployment (Intel/AMD instances)**
 
 #### **1. Build and Push AMD64 Images**
+
 ```bash
 # Build multi-platform backend
 cd backend
@@ -1521,6 +2126,7 @@ docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/ollama-chat-frontend:am
 ```
 
 #### **2. EC2 Deployment (AMD64)**
+
 ```bash
 # Launch EC2 instance (t3.medium recommended)
 aws ec2 run-instances \
@@ -1567,6 +2173,7 @@ docker run -d \
 ### **ARM64 Deployment (Graviton instances)**
 
 #### **1. Build and Push ARM64 Images**
+
 ```bash
 # Build ARM64 backend
 cd backend
@@ -1587,6 +2194,7 @@ docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/ollama-chat-frontend:ar
 ```
 
 #### **2. EC2 Graviton Deployment**
+
 ```bash
 # Launch Graviton EC2 instance (t4g.medium recommended - ARM64)
 aws ec2 run-instances \
@@ -1620,6 +2228,7 @@ docker run -d \
 ### **Multi-Architecture Deployment**
 
 #### **1. Build Universal Images**
+
 ```bash
 # Create multi-arch backend image
 cd backend
@@ -1639,6 +2248,7 @@ docker buildx imagetools inspect <account-id>.dkr.ecr.us-east-1.amazonaws.com/ol
 ```
 
 #### **2. Deploy to Mixed Architecture Fleet**
+
 ```bash
 # The same docker run commands work on both AMD64 and ARM64 instances
 # Docker automatically pulls the correct architecture
@@ -1656,6 +2266,7 @@ docker run -d \
 ### **ECS Deployment (Recommended for Production)**
 
 #### **1. ECS Cluster Setup**
+
 ```bash
 # Create ECS cluster
 aws ecs create-cluster --cluster-name ollama-chat-cluster
@@ -1717,6 +2328,7 @@ aws ecs register-task-definition --cli-input-json file://task-definition.json
 ```
 
 #### **2. ECS Service Deployment**
+
 ```bash
 # Create ECS service
 aws ecs create-service \
@@ -1736,6 +2348,7 @@ aws ecs create-service \
 ### **GitHub Actions Workflow Setup**
 
 #### **1. Repository Secrets**
+
 Configure these secrets in GitHub repository settings:
 
 ```bash
@@ -1756,6 +2369,7 @@ ECS_TASK_DEFINITION=ollama-chat-app
 ```
 
 #### **2. Main CI/CD Workflow**
+
 ```yaml
 # .github/workflows/deploy.yml
 name: Deploy Ollama Chat App
@@ -1779,14 +2393,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
-          cache: 'npm'
+          node-version: "18"
+          cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install frontend dependencies
         run: |
@@ -1869,6 +2483,7 @@ jobs:
 ```
 
 #### **3. Feature Branch Testing**
+
 ```yaml
 # .github/workflows/test-pr.yml
 name: Test Pull Request
@@ -1887,14 +2502,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
-          cache: 'npm'
+          node-version: "18"
+          cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install and test frontend
         run: |
@@ -1920,6 +2535,7 @@ jobs:
 ### **Environment-Specific Deployments**
 
 #### **1. Staging Environment**
+
 ```yaml
 # .github/workflows/deploy-staging.yml
 name: Deploy to Staging
@@ -1950,6 +2566,7 @@ jobs:
 ```
 
 #### **2. Production Release**
+
 ```yaml
 # .github/workflows/release.yml
 name: Production Release
@@ -1992,6 +2609,7 @@ jobs:
 ### **Common Local Development Issues**
 
 #### **1. Backend Issues**
+
 ```bash
 # Python environment problems
 which python3
@@ -2014,6 +2632,7 @@ python app.py
 ```
 
 #### **2. Frontend Issues**
+
 ```bash
 # Node/npm issues
 node --version
@@ -2034,6 +2653,7 @@ curl -v http://localhost:3000/api/health
 ```
 
 #### **3. Docker Issues**
+
 ```bash
 # Docker not running
 sudo systemctl status docker
@@ -2052,6 +2672,7 @@ docker buildx inspect   # Check builder status
 ### **AWS Deployment Issues**
 
 #### **1. Authentication Problems**
+
 ```bash
 # Check AWS credentials
 aws sts get-caller-identity
@@ -2067,6 +2688,7 @@ aws iam list-attached-user-policies --user-name <username>
 ```
 
 #### **2. Container Registry Issues**
+
 ```bash
 # Repository doesn't exist
 aws ecr describe-repositories --repository-names ollama-chat-backend
@@ -2080,6 +2702,7 @@ docker push <ecr-uri>:latest
 ```
 
 #### **3. ECS Deployment Issues**
+
 ```bash
 # Service not starting
 aws ecs describe-services --cluster <cluster> --services <service>
@@ -2096,6 +2719,7 @@ aws ec2 describe-subnets --subnet-ids <subnet-id>
 ### **CI/CD Pipeline Issues**
 
 #### **1. GitHub Actions Failures**
+
 ```bash
 # Check workflow logs in GitHub Actions tab
 # Common issues:
@@ -2109,6 +2733,7 @@ act  # Run GitHub Actions locally (if act is installed)
 ```
 
 #### **2. Multi-Architecture Build Issues**
+
 ```bash
 # Buildx not enabled
 docker buildx version
@@ -2125,6 +2750,7 @@ docker run --privileged --rm tonistiigi/binfmt --install all
 ### **Performance Optimization**
 
 #### **1. Local Development**
+
 ```bash
 # Frontend optimization
 npm run build -- --watch  # Watch mode for builds
@@ -2136,6 +2762,7 @@ python -m cProfile app.py              # Profile performance
 ```
 
 #### **2. Production Optimization**
+
 ```bash
 # Docker image optimization
 docker images  # Check image sizes
@@ -2153,6 +2780,7 @@ docker images  # Check image sizes
 ### **Monitoring and Logging**
 
 #### **1. Local Monitoring**
+
 ```bash
 # Container logs
 docker logs -f container-name
@@ -2167,6 +2795,7 @@ tcpdump -i any port 8000
 ```
 
 #### **2. AWS Monitoring**
+
 ```bash
 # CloudWatch logs
 aws logs describe-log-groups
@@ -2182,6 +2811,7 @@ aws cloudwatch get-metric-statistics --namespace AWS/ECS
 ## 📚 Additional Resources
 
 ### **Documentation Links**
+
 - [Flask Documentation](https://flask.palletsprojects.com/)
 - [React Documentation](https://reactjs.org/docs/)
 - [Docker Documentation](https://docs.docker.com/)
@@ -2189,6 +2819,7 @@ aws cloudwatch get-metric-statistics --namespace AWS/ECS
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
 
 ### **Useful Commands Reference**
+
 ```bash
 # Git shortcuts
 alias gs='git status'
@@ -2211,6 +2842,7 @@ alias build-all='docker build -t backend backend/ && docker build -t frontend fr
 ```
 
 ### **Project Structure Reference**
+
 ```
 ollama-chat-app/
 ├── backend/                 # Flask API server

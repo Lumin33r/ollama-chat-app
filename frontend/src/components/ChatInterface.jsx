@@ -59,7 +59,7 @@ const ChatInterface = ({
         try {
             // Call your Flask backend API
             const response = await axios.post('/api/chat', {
-                message: userMessage.content,
+                prompt: userMessage.content,
                 conversation_id: conversation.id,
                 // Include conversation history for context
                 messages: conversation.messages
