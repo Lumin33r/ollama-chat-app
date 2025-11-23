@@ -47,20 +47,6 @@ A comprehensive guide for local development, git workflow, service testing, and 
   # Or if already in VS Code, use: Ctrl+K Ctrl+O to open folder
   ```
 
-- [ ] **Configure VS Code Workspace**
-  - **Terminal Setup**: Open integrated terminal (`Ctrl+``)
-  - **Split Terminal**: Create multiple terminals for parallel work
-    - Terminal 1: Backend development
-    - Terminal 2: Frontend development
-    - Terminal 3: Git commands & testing
-  - **Recommended Extensions** (if not installed):
-    - ES7+ React/Redux/React-Native snippets
-    - Python
-    - ESLint
-    - Prettier
-    - GitLens
-    - Docker
-
 #### **2. Update Local Repository**
 
 - [ ] **Sync with Remote Repository**
@@ -2872,5 +2858,19 @@ ollama-chat-app/
 ├── docs/                   # Documentation
 └── startup_and_dev.md     # This guide
 ```
+
+- [ ] **Configure VS Code Workspace**
+  - **Terminal Setup**: Open integrated terminal (`Ctrl+``)
+  - **Split Terminal**: Create multiple terminals for parallel work
+    - Terminal 1: Backend development
+    - Terminal 2: Frontend development
+    - Terminal 3: Git commands & testing
+  - **Recommended Extensions** (if not installed):
+    - ES7+ React/Redux/React-Native snippets
+    - Python
+    - ESLint
+    - Prettier
+    - GitLens
+    - Docker
 
 This guide provides a comprehensive workflow for developing, testing, and deploying the Ollama Chat application. Follow the sections sequentially for first-time setup, or use as a reference for specific tasks during ongoing development.
