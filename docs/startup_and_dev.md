@@ -156,6 +156,43 @@ A comprehensive guide for local development, git workflow, service testing, and 
   xdg-open http://localhost:3000
   ```
 
+- [ ] **Start Ollama Service**
+
+  ```bash
+  # Start Ollama service in background
+  ollama serve &
+
+  # Or if running in Docker
+  docker run -d \
+    -p 11434:11434 \
+    --name ollama \
+    ollama/ollama
+
+  # Pull the model if not already available
+  ollama pull llama2
+  ```
+
+- [ ] **Verify Ollama Service is Running**
+
+  ```bash
+  # Check Ollama service health
+  curl http://localhost:11434/api/tags
+
+  # Expected output: JSON with list of available models
+  # {"models": [{"name": "llama2:latest", ...}]}
+
+  # Test basic chat functionality
+  curl -X POST http://localhost:11434/api/generate \
+    -H "Content-Type: application/json" \
+    -d '{
+      "model": "llama2",
+      "prompt": "Hello, how are you?",
+      "stream": false
+    }'
+
+  # Expected: JSON response with model output
+  ```
+
 ### **During Development Session**
 
 #### **5. Choose Files to Work On**
