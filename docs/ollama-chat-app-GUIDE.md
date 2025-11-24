@@ -15,6 +15,15 @@
   - [Why Separate Containers? (Best Practices)](#why-separate-containers-best-practices)
 - [Converting Local Development to Containers](#converting-local-development-to-containers)
 - [Project Structure (Updated for Containers)](#project-structure-updated-for-containers)
+- [Environment Configuration Architecture](#environment-configuration-architecture)
+  - [Overview: Environment-Based Configuration Strategy](#overview-environment-based-configuration-strategy)
+  - [Frontend Environment Configuration](#frontend-environment-configuration)
+  - [Environment Variable Flow](#environment-variable-flow)
+  - [Docker Compose Integration](#docker-compose-integration)
+  - [Security Best Practices](#security-best-practices)
+  - [Troubleshooting Environment Issues](#troubleshooting-environment-issues)
+  - [Verification Commands](#verification-commands)
+  - [Environment Configuration Summary](#environment-configuration-summary)
 - [Docker Compose Implementation](#docker-compose-implementation)
 - [Understanding Docker Compose Files](#understanding-docker-compose-files)
   - [Base Configuration: docker-compose.yml](#base-configuration-docker-composeyml)
@@ -321,6 +330,15 @@ docker-compose up
 projects/ollama-chat-app/
 ├── frontend/                    # React + Vite application
 │   ├── src/
+│   │   ├── components/         # React components
+│   │   │   └── ChatInterface.jsx
+│   │   ├── services/           # 🆕 Centralized services
+│   │   │   └── api.js          # 🆕 Axios API configuration
+│   │   └── App.jsx
+│   ├── .env.development        # 🆕 Development environment config
+│   ├── .env.production         # 🆕 Production environment template
+│   ├── .env.example            # 🆕 Documentation template
+│   ├── .gitignore              # 🆕 Updated with .env rules
 │   ├── package.json
 │   ├── vite.config.js
 │   ├── Dockerfile              # Multi-stage: build → nginx
@@ -364,6 +382,422 @@ projects/ollama-chat-app/
 │   └── SECURITY_GUIDE.md
 └── README.md
 ```
+
+---
+
+## Environment Configuration Architecture
+
+### **Overview: Environment-Based Configuration Strategy**
+
+The application uses a **layered configuration approach** that separates environment-specific settings from code, enabling seamless transitions between development, staging, and production environments.
+
+```
+Configuration Hierarchy:
+┌─────────────────────────────────────────────┐
+│  Application Layer (React Components)       │
+│  └─ Uses: import.meta.env.VITE_API_URL     │
+└────────────────┬────────────────────────────┘
+                 │
+┌────────────────▼────────────────────────────┐
+│  API Service Layer (src/services/api.js)    │
+│  └─ Configures: axios baseURL from env     │
+└────────────────┬────────────────────────────┘
+                 │
+┌────────────────▼────────────────────────────┐
+│  Environment Files (.env.*)                 │
+│  ├─ .env.development  (local dev)          │
+│  ├─ .env.production   (cloud deploy)       │
+│  └─ .env.example      (documentation)      │
+└────────────────┬────────────────────────────┘
+                 │
+┌────────────────▼────────────────────────────┐
+│  Docker Compose (runtime injection)         │
+│  └─ Passes: VITE_API_URL to containers     │
+└─────────────────────────────────────────────┘
+```
+
+### **Frontend Environment Configuration**
+
+#### **1. Environment Files Structure**
+
+```
+frontend/
+├── .env.development      # Development settings (committed)
+├── .env.production       # Production template (committed)
+├── .env.example          # Documentation (committed)
+├── .env                  # Local overrides (gitignored)
+├── .env.local            # Local secrets (gitignored)
+├── .gitignore            # Excludes sensitive .env files
+└── src/
+    └── services/
+        └── api.js        # Centralized API service
+```
+
+#### **2. Environment File Contents**
+
+**`.env.development`** - Local Development Configuration
+
+```bash
+# Development API endpoint (backend container)
+VITE_API_URL=http://localhost:8000
+
+# Application name for dev environment
+VITE_APP_NAME=Ollama Chat (Dev)
+
+# Enable debug mode (optional)
+VITE_DEBUG=true
+```
+
+**`.env.production`** - Production Template
+
+```bash
+# Production API endpoint (cloud/AWS deployment)
+VITE_API_URL=https://api.yourdomain.com
+
+# Application name for production
+VITE_APP_NAME=Ollama Chat
+
+# Disable debug in production
+VITE_DEBUG=false
+```
+
+**`.env.example`** - Documentation for Developers
+
+```bash
+# Example environment configuration
+# Copy this file to .env.development or .env.production and customize
+
+# API Base URL - Points to Flask backend
+VITE_API_URL=http://localhost:8000
+
+# Application Display Name
+VITE_APP_NAME=Ollama Chat
+
+# Debug Mode (true/false)
+VITE_DEBUG=false
+```
+
+#### **3. Centralized API Service**
+
+**`frontend/src/services/api.js`** - Single Source of Truth for API Communication
+
+```javascript
+import axios from "axios";
+
+// Get API URL from environment variable
+// Vite exposes env vars prefixed with VITE_ via import.meta.env
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
+// Create axios instance with base configuration
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    "Content-Type": "application/json",
+  },
+  timeout: 120000, // 120 seconds for AI model responses
+});
+
+// Request interceptor - logs outgoing requests
+api.interceptors.request.use(
+  (config) => {
+    console.log(
+      `🚀 API Request: ${config.method?.toUpperCase()} ${config.baseURL}${
+        config.url
+      }`
+    );
+    return config;
+  },
+  (error) => {
+    console.error("❌ API Request Error:", error);
+    return Promise.reject(error);
+  }
+);
+
+// Response interceptor - logs responses and handles errors
+api.interceptors.response.use(
+  (response) => {
+    console.log(`✅ API Response: ${response.config.url}`, response.data);
+    return response;
+  },
+  (error) => {
+    console.error(
+      "❌ API Response Error:",
+      error.response?.data || error.message
+    );
+    return Promise.reject(error);
+  }
+);
+
+export default api;
+```
+
+**Key Features:**
+
+- **Centralized Configuration**: Single place to manage API settings
+- **Environment Awareness**: Automatically uses correct API URL per environment
+- **Request/Response Logging**: Debug-friendly console output
+- **Error Handling**: Consistent error format across the app
+- **Timeout Management**: 120s timeout for long-running AI requests
+
+#### **4. Component Usage Pattern**
+
+**Before (Problematic Approach):**
+
+```javascript
+// ❌ BAD: Direct axios with relative URL
+import axios from "axios";
+
+const response = await axios.post("/api/chat", data);
+// Problem: Calls http://localhost:3000/api/chat (frontend port)
+```
+
+**After (Correct Approach):**
+
+```javascript
+// ✅ GOOD: Use centralized API service
+import api from "../services/api";
+
+const response = await api.post("/api/chat", {
+  prompt: userMessage,
+  model: "llama2",
+  messages: conversationHistory,
+});
+// Correctly calls http://localhost:8000/api/chat (backend port)
+```
+
+### **Environment Variable Flow**
+
+#### **Development Workflow**
+
+```
+1. Developer sets .env.development
+   └─ VITE_API_URL=http://localhost:8000
+
+2. Vite dev server loads environment
+   └─ import.meta.env.VITE_API_URL available
+
+3. API service reads environment
+   └─ API_BASE_URL = import.meta.env.VITE_API_URL
+
+4. Components import API service
+   └─ api.post('/api/chat', ...) → http://localhost:8000/api/chat
+
+5. Docker Compose injects environment
+   └─ docker-compose.dev.yml sets VITE_API_URL
+```
+
+#### **Production Workflow**
+
+```
+1. Build-time: Docker reads .env.production
+   └─ ARG VITE_API_URL=https://api.yourdomain.com
+
+2. Build-time: ENV var baked into image
+   └─ ENV VITE_API_URL=$VITE_API_URL
+
+3. Build-time: Vite bundles with env vars
+   └─ npm run build (VITE_API_URL embedded in JS)
+
+4. Runtime: nginx serves static bundle
+   └─ API calls go to https://api.yourdomain.com
+```
+
+### **Docker Compose Integration**
+
+#### **Development Configuration**
+
+```yaml
+# docker-compose.dev.yml
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+      args:
+        - VITE_API_URL=http://localhost:8000 # Build argument
+    environment:
+      - VITE_API_URL=http://localhost:8000 # Runtime environment
+      - NODE_ENV=development
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+      - "24678:24678" # Vite HMR WebSocket
+```
+
+**Why Both `args` and `environment`?**
+
+- **`args`**: Passed to Dockerfile during `docker build` (for multi-stage builds)
+- **`environment`**: Available in running container (for Vite dev server)
+
+#### **Production Configuration**
+
+```yaml
+# docker-compose.prod.yml
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Inject from host environment or use default
+        - VITE_API_URL=${API_URL:-https://api.yourdomain.com}
+    environment:
+      - NODE_ENV=production
+    ports:
+      - "80:80"
+      - "443:443"
+```
+
+**Production Deployment:**
+
+```bash
+# Set production API URL before building
+export API_URL=https://api.yourcompany.com
+
+# Build with production config
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
+
+# Deploy
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+### **Security Best Practices**
+
+#### **.gitignore Configuration**
+
+```gitignore
+# Frontend .gitignore
+node_modules/
+dist/
+build/
+
+# Environment variables - CRITICAL SECURITY
+.env                      # ❌ Never commit (local overrides)
+.env.local                # ❌ Never commit (local secrets)
+.env.development.local    # ❌ Never commit (dev secrets)
+.env.production.local     # ❌ Never commit (prod secrets)
+
+# Keep these for documentation
+!.env.example             # ✅ Commit (template)
+!.env.development         # ✅ Commit (dev config)
+!.env.production          # ✅ Commit (prod template)
+```
+
+**Why This Approach?**
+
+- ✅ **Shared Defaults**: Team uses same dev/prod configs
+- ✅ **Local Overrides**: Developers can customize without affecting others
+- ✅ **No Secrets in Git**: API keys, tokens never committed
+- ✅ **Documentation**: .env.example shows all available options
+
+### **Troubleshooting Environment Issues**
+
+#### **Issue 1: Frontend Calls Wrong URL**
+
+**Symptom:** Browser console shows `http://localhost:3000/api/chat` instead of `http://localhost:8000/api/chat`
+
+**Solution:**
+
+```bash
+# 1. Check environment file exists
+ls -la frontend/.env.development
+
+# 2. Verify content
+cat frontend/.env.development
+# Should show: VITE_API_URL=http://localhost:8000
+
+# 3. Restart Vite dev server
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml restart frontend
+
+# 4. Check in browser console
+# Should see: 🚀 API Request: POST http://localhost:8000/api/chat
+```
+
+#### **Issue 2: Environment Variable Not Loading**
+
+**Symptom:** `import.meta.env.VITE_API_URL` is undefined
+
+**Causes & Fixes:**
+
+```bash
+# Cause 1: Missing VITE_ prefix
+# ❌ API_URL=http://localhost:8000
+# ✅ VITE_API_URL=http://localhost:8000
+
+# Cause 2: Server not restarted after .env change
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml restart frontend
+
+# Cause 3: .env file not in correct location
+# ✅ frontend/.env.development (correct)
+# ❌ frontend/src/.env.development (wrong)
+
+# Cause 4: Syntax error in .env file
+# ❌ VITE_API_URL = http://localhost:8000  (spaces around =)
+# ✅ VITE_API_URL=http://localhost:8000   (no spaces)
+```
+
+#### **Issue 3: Production Build Using Dev URL**
+
+**Symptom:** Production deployment calls `http://localhost:8000` instead of production URL
+
+**Solution:**
+
+```bash
+# Option 1: Update .env.production
+cat > frontend/.env.production << EOF
+VITE_API_URL=https://api.yourcompany.com
+VITE_APP_NAME=Ollama Chat
+EOF
+
+# Option 2: Pass at build time
+docker build --build-arg VITE_API_URL=https://api.yourcompany.com \
+  -f frontend/Dockerfile \
+  -t ollama-frontend:prod \
+  frontend/
+
+# Option 3: Use docker-compose with environment variable
+API_URL=https://api.yourcompany.com \
+  docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
+```
+
+### **Verification Commands**
+
+```bash
+# Check environment in running container
+docker exec ollama-frontend printenv | grep VITE
+
+# Check build-time arguments
+docker inspect ollama-frontend | jq '.[0].Config.Env'
+
+# Check .env files are correct
+cat frontend/.env.development
+cat frontend/.env.production
+
+# Test API service in browser console
+fetch('http://localhost:8000/health')
+  .then(r => r.json())
+  .then(console.log)
+```
+
+### **Environment Configuration Summary**
+
+| File               | Purpose              | Committed to Git | Used When                          |
+| ------------------ | -------------------- | ---------------- | ---------------------------------- |
+| `.env.development` | Default dev settings | ✅ Yes           | `npm run dev` or dev Docker        |
+| `.env.production`  | Production template  | ✅ Yes           | Production build                   |
+| `.env.example`     | Documentation        | ✅ Yes           | Reference for developers           |
+| `.env`             | Local overrides      | ❌ No            | Any environment (highest priority) |
+| `.env.local`       | Local secrets        | ❌ No            | Any environment (sensitive data)   |
+| `.env.*.local`     | Env-specific secrets | ❌ No            | Specific environment secrets       |
+
+**Priority Order (Vite):**
+
+1. `.env.local` (highest priority)
+2. `.env.[mode].local` (e.g., `.env.development.local`)
+3. `.env.[mode]` (e.g., `.env.development`)
+4. `.env` (lowest priority)
 
 ---
 
