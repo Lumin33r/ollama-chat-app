@@ -22,6 +22,12 @@
   - [Production Configuration: docker-compose.prod.yml](#production-configuration-docker-composeprodyml)
   - [Build Optimization: .dockerignore](#build-optimization-dockerignore)
   - [Working with Multiple Compose Files](#working-with-multiple-compose-files)
+- [Building Docker Images](#building-docker-images)
+  - [Build All Services](#build-all-services)
+  - [Build Individual Services](#build-individual-services)
+  - [Verify Built Images](#verify-built-images)
+  - [Rebuild After Code Changes](#rebuild-after-code-changes)
+  - [Troubleshooting Build Issues](#troubleshooting-build-issues)
 - [Migration Steps: Local → Containers](#migration-steps-local--containers)
 - [Phase 1: Project Setup & Development Environment](#phase-1-project-setup--development-environment)
 - [Phase 2: Frontend Development (React + Vite)](#phase-2-frontend-development-react--vite)
@@ -1421,6 +1427,692 @@ secrets:
 | `docker-compose.override.yml`                    | **Personal overrides** (local port changes, etc.) | Auto-loaded by `docker-compose up`                                      |
 
 **Golden Rule**: Always use **base file + environment-specific file**. Never use base file alone in actual deployments.
+
+---
+
+## Building Docker Images
+
+Once you have created your Dockerfiles and Docker Compose configuration, you need to build the Docker images before running the containers. This section provides complete instructions for building, verifying, and troubleshooting your containerized Ollama Chat App.
+
+### **Prerequisites**
+
+Before building images, verify your Docker installation:
+
+```bash
+# Verify Docker is installed
+docker --version
+# Should show: Docker version 24.x.x or higher
+
+# Verify Docker Compose is installed
+docker-compose --version
+# Should show: Docker Compose version v2.x.x or higher
+
+# Check Docker is running
+docker ps
+# Should show table of running containers (may be empty)
+
+# Navigate to project root
+cd ~/codeplatoon/projects/ollama-chat-app
+```
+
+---
+
+### **Build All Services**
+
+#### **Option 1: Using Docker Compose (Recommended)**
+
+```bash
+# Build all services using base + dev configuration
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build
+
+# Or with production configuration
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
+
+# Build with no cache (clean build)
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build --no-cache
+
+# Build with progress output
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build --progress=plain
+
+# Build in parallel (faster)
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build --parallel
+```
+
+#### **Option 2: Using Build Script**
+
+Create a helper script for easier building:
+
+```bash
+# Create build script
+cat > build.sh << 'EOF'
+#!/bin/bash
+
+set -e  # Exit on error
+
+echo "Building Ollama Chat App Docker Images"
+echo ""
+
+# Parse arguments
+ENV=${1:-dev}  # Default to dev
+
+if [ "$ENV" = "dev" ]; then
+    echo "Building DEVELOPMENT images..."
+    COMPOSE_FILES="-f docker-compose.yml -f docker-compose.dev.yml"
+elif [ "$ENV" = "prod" ]; then
+    echo "Building PRODUCTION images..."
+    COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
+else
+    echo "Invalid environment: $ENV"
+    echo "Usage: ./build.sh [dev|prod]"
+    exit 1
+fi
+
+# Build images
+echo ""
+echo "Building backend..."
+docker-compose $COMPOSE_FILES build backend
+
+echo ""
+echo "Building frontend..."
+docker-compose $COMPOSE_FILES build frontend
+
+echo ""
+echo "Pulling Ollama image..."
+docker-compose $COMPOSE_FILES pull ollama-service
+
+echo ""
+echo "Build complete!"
+echo ""
+echo "Images created:"
+docker-compose $COMPOSE_FILES images
+
+echo ""
+echo "To start services, run:"
+echo "   docker-compose $COMPOSE_FILES up -d"
+EOF
+
+chmod +x build.sh
+
+# Usage:
+./build.sh dev      # Build development images
+./build.sh prod     # Build production images
+```
+
+---
+
+### **Build Individual Services**
+
+If you only need to rebuild specific services:
+
+```bash
+# Build only backend
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build backend
+
+# Build only frontend
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build frontend
+
+# Ollama service uses pre-built image (just pull it)
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml pull ollama-service
+```
+
+---
+
+### **Verify Built Images**
+
+After building, verify your images were created successfully:
+
+```bash
+# List all Docker images
+docker images
+
+# You should see:
+# REPOSITORY                    TAG       IMAGE ID       CREATED         SIZE
+# ollama-chat-app-backend      latest    abc123...      2 minutes ago   500MB
+# ollama-chat-app-frontend     latest    def456...      1 minute ago    150MB
+# ollama/ollama                latest    ghi789...      1 week ago      1.2GB
+
+# Or using docker-compose
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml images
+
+# Check image details
+docker inspect ollama-chat-app-backend:latest
+
+# Check image layers (useful for debugging size)
+docker history ollama-chat-app-backend:latest
+
+# Check image size
+docker images ollama-chat-app-backend --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"
+```
+
+---
+
+### **Start Services After Building**
+
+#### **Development Environment**
+
+```bash
+# Start all services in development mode
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+# View logs
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml logs -f
+
+# Check service status
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml ps
+
+# Test endpoints
+curl http://localhost:11434/api/tags
+curl http://localhost:8000/health
+curl http://localhost:3000
+```
+
+#### **Production Environment**
+
+```bash
+# Start all services in production mode
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# View logs
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml logs -f
+
+# Check service status
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml ps
+```
+
+---
+
+### **Complete First-Time Setup Workflow**
+
+#### **Development Setup**
+
+```bash
+# 1. Navigate to project
+cd ~/codeplatoon/projects/ollama-chat-app
+
+# 2. Build images
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build
+
+# 3. Start services
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+# 4. Wait for services to be healthy (check logs)
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml logs -f
+
+# 5. Pull Ollama model
+docker exec ollama-service ollama pull llama2
+
+# 6. Verify Ollama model is available
+docker exec ollama-service ollama list
+
+# 7. Verify services are running
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml ps
+
+# 8. Test endpoints
+curl http://localhost:11434/api/tags
+curl http://localhost:8000/health
+
+# 9. Open in browser
+# http://localhost:3000
+```
+
+#### **Production Setup**
+
+```bash
+# 1. Set environment variables (if needed)
+export SECRET_KEY="your-secret-key-here"
+export API_URL="https://api.yourdomain.com"
+
+# 2. Navigate to project
+cd ~/codeplatoon/projects/ollama-chat-app
+
+# 3. Build production images
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
+
+# 4. Start services
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# 5. Pull Ollama models
+docker exec ollama-service ollama pull llama2
+docker exec ollama-service ollama pull mistral
+
+# 6. Verify services
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml ps
+
+# 7. Check health
+curl http://localhost:8000/health
+
+# 8. View logs
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml logs -f
+```
+
+---
+
+### **Rebuild After Code Changes**
+
+#### **Development (with hot-reload)**
+
+In development mode, code changes are automatically reflected thanks to volume mounts:
+
+```bash
+# For Python code changes (backend/app.py):
+# Flask detects changes automatically - NO REBUILD NEEDED
+
+# For React code changes (frontend/src/**):
+# Vite HMR updates browser automatically - NO REBUILD NEEDED
+
+# Only rebuild if you change dependencies:
+
+# Backend: If requirements.txt changed
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build backend
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d backend
+
+# Frontend: If package.json changed
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build frontend
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d frontend
+
+# If Dockerfile changed
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build --no-cache backend
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d backend
+```
+
+#### **Production (requires rebuild)**
+
+In production, code is copied into the image, so rebuilds are required:
+
+```bash
+# Rebuild specific service
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml build backend
+
+# Restart with new image (zero downtime if configured with replicas)
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-deps backend
+
+# Or rebuild all services
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+---
+
+### **Troubleshooting Build Issues**
+
+#### **Issue 1: Build fails with "no space left on device"**
+
+```bash
+# Check Docker disk usage
+docker system df
+
+# Clean up unused images
+docker image prune -a
+
+# Clean up unused containers
+docker container prune
+
+# Clean up unused volumes
+docker volume prune
+
+# Full cleanup (CAREFUL - removes everything unused)
+docker system prune -a --volumes
+
+# Check disk space
+df -h
+```
+
+#### **Issue 2: Build fails with "Cannot connect to Docker daemon"**
+
+```bash
+# Check if Docker is running
+sudo systemctl status docker
+
+# Start Docker
+sudo systemctl start docker
+
+# Enable Docker on boot
+sudo systemctl enable docker
+
+# Add user to docker group (to avoid sudo)
+sudo usermod -aG docker $USER
+
+# Log out and back in for group changes to take effect
+```
+
+#### **Issue 3: Build is very slow**
+
+```bash
+# Enable BuildKit for faster builds
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+
+# Build with BuildKit
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build
+
+# Or use --parallel flag
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build --parallel
+
+# Check .dockerignore is excluding large directories
+cat .dockerignore
+# Should include: node_modules, venv, .git, __pycache__
+```
+
+#### **Issue 4: Cache issues - old code still running**
+
+```bash
+# Build with --no-cache flag
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build --no-cache
+
+# Or remove specific image and rebuild
+docker rmi ollama-chat-app-backend
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build backend
+
+# Force recreate containers
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d --force-recreate
+```
+
+#### **Issue 5: Permission denied errors**
+
+```bash
+# Check file permissions
+ls -la backend/Dockerfile
+ls -la frontend/Dockerfile
+
+# Fix file permissions
+chmod 644 backend/Dockerfile
+chmod 644 frontend/Dockerfile
+chmod 644 docker-compose*.yml
+
+# Fix directory permissions
+chmod 755 backend
+chmod 755 frontend
+
+# Check ownership
+ls -la backend/
+# If files owned by root, fix with:
+sudo chown -R $USER:$USER backend/
+sudo chown -R $USER:$USER frontend/
+```
+
+#### **Issue 6: Module not found or import errors**
+
+```bash
+# Backend: Check requirements.txt is being copied
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build --no-cache backend
+
+# Verify requirements are installed in image
+docker run --rm ollama-chat-app-backend pip list
+
+# Check requirements.txt exists
+cat backend/requirements.txt
+
+# Frontend: Check package.json
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build --no-cache frontend
+
+# Verify dependencies in image
+docker run --rm ollama-chat-app-frontend npm list
+
+# Check package.json exists
+cat frontend/package.json
+```
+
+#### **Issue 7: Frontend build fails with "ENOENT" errors**
+
+```bash
+# Clean node_modules and rebuild
+cd frontend
+rm -rf node_modules package-lock.json
+npm install
+
+# Rebuild frontend image
+cd ..
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build --no-cache frontend
+
+# Check if .dockerignore is correct
+cat frontend/.dockerignore
+# Should include: node_modules, dist, build
+```
+
+#### **Issue 8: Backend build fails with Python errors**
+
+```bash
+# Test requirements.txt locally first
+cd backend
+python -m venv test_venv
+source test_venv/bin/activate
+pip install -r requirements.txt
+
+# If that works, rebuild image
+cd ..
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build --no-cache backend
+
+# Check Python version in Dockerfile matches your requirements
+grep "FROM python" backend/Dockerfile
+# Should be: FROM python:3.11-slim
+```
+
+---
+
+### **Build Performance Tips**
+
+#### **1. Use .dockerignore Effectively**
+
+```bash
+# Verify .dockerignore is working
+cd ~/codeplatoon/projects/ollama-chat-app
+
+# Check what's being sent to Docker daemon
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build backend 2>&1 | grep "Sending build context"
+
+# Should show: Sending build context to Docker daemon  15MB
+# Not: Sending build context to Docker daemon  1.2GB (too large)
+```
+
+Create comprehensive `.dockerignore` in project root:
+
+```
+# Dependencies (installed inside container)
+node_modules/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Development files
+.git/
+.gitignore
+.env
+.env.local
+*.log
+npm-debug.log*
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Infrastructure (not needed in container)
+.terraform/
+*.tfstate
+*.tfstate.backup
+
+# Documentation
+README.md
+docs/
+*.md
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# CI/CD
+.github/
+```
+
+#### **2. Order Dockerfile Commands for Better Caching**
+
+```dockerfile
+# Good (leverages cache):
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+
+# Bad (cache invalidated often):
+COPY . .
+RUN pip install -r requirements.txt
+```
+
+#### **3. Use Multi-Stage Builds**
+
+Example for frontend:
+
+```dockerfile
+# Stage 1: Build
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# Stage 2: Production
+FROM nginx:alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+# Final image only contains built files, not node_modules
+```
+
+#### **4. Enable BuildKit**
+
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+
+source ~/.bashrc
+
+# Or per-command
+DOCKER_BUILDKIT=1 docker-compose -f docker-compose.yml -f docker-compose.dev.yml build
+```
+
+---
+
+### **Tagging and Versioning Images**
+
+#### **Tag Images with Versions**
+
+```bash
+# Build images
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
+
+# Tag with version
+docker tag ollama-chat-app-backend:latest ollama-chat-app-backend:1.0.0
+docker tag ollama-chat-app-frontend:latest ollama-chat-app-frontend:1.0.0
+
+# Tag with git commit
+GIT_COMMIT=$(git rev-parse --short HEAD)
+docker tag ollama-chat-app-backend:latest ollama-chat-app-backend:$GIT_COMMIT
+docker tag ollama-chat-app-frontend:latest ollama-chat-app-frontend:$GIT_COMMIT
+
+# View all tags
+docker images | grep ollama-chat-app
+```
+
+#### **Build with Custom Tags**
+
+```bash
+# Set image tag via environment variable
+VERSION=1.0.0 docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
+
+# Update docker-compose.yml to use variable:
+# services:
+#   backend:
+#     image: ollama-chat-app-backend:${VERSION:-latest}
+```
+
+---
+
+### **Command Aliases for Convenience**
+
+Add these to `~/.bashrc` or `~/.zshrc`:
+
+```bash
+# Docker Compose aliases
+alias dc-dev-build='docker-compose -f docker-compose.yml -f docker-compose.dev.yml build'
+alias dc-dev-up='docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d'
+alias dc-dev-down='docker-compose -f docker-compose.yml -f docker-compose.dev.yml down'
+alias dc-dev-logs='docker-compose -f docker-compose.yml -f docker-compose.dev.yml logs -f'
+alias dc-dev-ps='docker-compose -f docker-compose.yml -f docker-compose.dev.yml ps'
+
+alias dc-prod-build='docker-compose -f docker-compose.yml -f docker-compose.prod.yml build'
+alias dc-prod-up='docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d'
+alias dc-prod-down='docker-compose -f docker-compose.yml -f docker-compose.prod.yml down'
+alias dc-prod-logs='docker-compose -f docker-compose.yml -f docker-compose.prod.yml logs -f'
+alias dc-prod-ps='docker-compose -f docker-compose.yml -f docker-compose.prod.yml ps'
+```
+
+Then reload:
+
+```bash
+source ~/.bashrc
+
+# Usage:
+dc-dev-build       # Build development images
+dc-dev-up          # Start development environment
+dc-dev-logs        # View logs
+dc-dev-down        # Stop development environment
+```
+
+---
+
+### **Build Checklist**
+
+Before deploying to production, verify:
+
+- [ ] All services build without errors
+- [ ] Images are tagged with version numbers
+- [ ] `.dockerignore` excludes unnecessary files
+- [ ] Health checks pass for all services
+- [ ] Resource limits are set (production)
+- [ ] Environment variables are configured
+- [ ] Volumes persist data correctly
+- [ ] Networks allow proper communication
+- [ ] Logs are structured and rotated
+- [ ] Security best practices followed
+
+---
+
+### **Next Steps After Building**
+
+1. **Pull Ollama Models**
+
+   ```bash
+   docker exec ollama-service ollama pull llama2
+   docker exec ollama-service ollama list
+   ```
+
+2. **Test Services**
+
+   ```bash
+   curl http://localhost:11434/api/tags
+   curl http://localhost:8000/health
+   curl http://localhost:3000
+   ```
+
+3. **Monitor Logs**
+
+   ```bash
+   docker-compose -f docker-compose.yml -f docker-compose.dev.yml logs -f
+   ```
+
+4. **Access Application**
+   - Frontend: http://localhost:3000
+   - Backend: http://localhost:8000
+   - Ollama: http://localhost:11434
 
 ---
 
