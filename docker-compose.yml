@@ -1,0 +1,74 @@
+version: "3.8"
+
+# Shared network for all services
+networks:
+  ollama-network:
+    driver: bridge
+
+# Persistent volumes
+volumes:
+  ollama-models:
+    driver: local
+
+services:
+  # Ollama AI Service
+  ollama-service:
+    image: ollama/ollama:latest
+    container_name: ollama-service
+    ports:
+      - "11434:11434"
+    volumes:
+      # Persist models between container restarts
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - ollama-network
+
+  # Backend Flask API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ollama-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Connect to ollama-service via Docker network
+      OLLAMA_HOST: ollama-service
+      OLLAMA_PORT: 11434
+      FLASK_ENV: production
+      FLASK_DEBUG: "False"
+    depends_on:
+      ollama-service:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ollama-network
+
+  # Frontend React SPA
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:8000
+    container_name: ollama-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - ollama-network
