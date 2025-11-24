@@ -11,8 +11,7 @@ A comprehensive guide for local development, git workflow, service testing, and 
   - [Option B: Initialize New Repository from Scratch](#option-b-initialize-new-repository-from-scratch)
 - [Local Development Environment](#local-development-environment)
 - [Frontend Development Guide](#frontend-development-guide)
-- [Ollama Service Guide]
-  (#ollama-service-guide)
+- [Ollama Service Guide](#ollama-service-guide)
 - [Git Workflow & Best Practices](#git-workflow--best-practices)
 - [Development Workflow](#development-workflow)
 - [AWS Production Deployment](#aws-production-deployment)
@@ -1764,6 +1763,8 @@ proxy: {
 ```
 
 ---
+
+## Ollama Service Guide
 
 ### **Ollama Service**
 
