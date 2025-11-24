@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 import traceback
-from ollama_connector import OllamaConnector
 
 app = Flask(__name__)
 CORS(app)
@@ -13,12 +12,15 @@ OLLAMA_PORT = os.getenv('OLLAMA_PORT', '11434')
 
 print(f"🤖 Connecting to Ollama at {OLLAMA_HOST}:{OLLAMA_PORT}")
 
-# Initialize Ollama connector
+# Try to import OllamaConnector
 try:
-    ollama = OllamaConnector(
-        base_url=f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
-    )
+    from ollama_connector import OllamaConnector
+    ollama = OllamaConnector(base_url=f"http://{OLLAMA_HOST}:{OLLAMA_PORT}")
     print("✅ OllamaConnector initialized successfully")
+except ImportError as e:
+    print(f"❌ Error importing OllamaConnector: {e}")
+    print("⚠️  Running without OllamaConnector - creating stub")
+    ollama = None
 except Exception as e:
     print(f"❌ Error initializing OllamaConnector: {e}")
     ollama = None
@@ -29,10 +31,11 @@ def index():
     return jsonify({
         "message": "Ollama Chat API",
         "version": "1.0.0",
+        "status": "running",
         "endpoints": {
             "health": "/health",
-            "chat": "/api/chat",
-            "models": "/api/models"
+            "chat": "/api/chat (POST)",
+            "models": "/api/models (GET)"
         }
     }), 200
 
@@ -46,7 +49,7 @@ def health_check():
                 "ollama_connected": False,
                 "error": "Ollama connector not initialized"
             }), 503
-
+        
         # Check if Ollama is accessible
         models = ollama.list_models()
         return jsonify({
@@ -67,58 +70,72 @@ def list_models():
     """List available Ollama models"""
     try:
         if ollama is None:
-            return jsonify({"error": "Ollama connector not initialized"}), 503
-
+            return jsonify({
+                "error": "Ollama connector not initialized",
+                "models": []
+            }), 503
+        
         models = ollama.list_models()
         return jsonify({
-            "models": models
+            "models": models,
+            "count": len(models)
         }), 200
     except Exception as e:
         print(f"❌ Error listing models: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        traceback.print_exc()
+        return jsonify({
+            "error": str(e),
+            "models": []
+        }), 500
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
     """Chat endpoint - send message to Ollama"""
     try:
         if ollama is None:
-            return jsonify({"error": "Ollama connector not initialized"}), 503
-
+            return jsonify({
+                "error": "Ollama connector not initialized"
+            }), 503
+        
         data = request.json
-
+        
         # Validate request
         if not data:
-            return jsonify({"error": "No JSON data provided"}), 400
-
+            return jsonify({
+                "error": "No JSON data provided"
+            }), 400
+        
         prompt = data.get('prompt', '')
         model = data.get('model', 'llama2')
         conversation_id = data.get('conversation_id', 'default')
         context = data.get('messages', [])
-
+        
         if not prompt:
-            return jsonify({"error": "Prompt is required"}), 400
-
+            return jsonify({
+                "error": "Prompt is required"
+            }), 400
+        
         print(f"💬 Chat request - Model: {model}, Prompt: {prompt[:50]}...")
-
+        
         # Call Ollama
         response = ollama.chat(
             message=prompt,
             model=model,
             context=context
         )
-
-        print(f"✅ Got response: {response[:50]}...")
-
+        
+        print(f"✅ Got response: {response[:100]}...")
+        
         return jsonify({
             "response": response,
             "conversation_id": conversation_id,
             "model": model
         }), 200
-
+    
     except Exception as e:
         print(f"❌ Error in chat endpoint: {str(e)}")
         traceback.print_exc()
-
+        
         return jsonify({
             "error": str(e),
             "type": type(e).__name__
@@ -131,7 +148,8 @@ def not_found(error):
         "error": "Not Found",
         "message": "The requested endpoint does not exist",
         "available_endpoints": {
-            "health": "/health",
+            "root": "/ (GET)",
+            "health": "/health (GET)",
             "chat": "/api/chat (POST)",
             "models": "/api/models (GET)"
         }
@@ -146,7 +164,9 @@ def internal_error(error):
     }), 500
 
 if __name__ == '__main__':
+    print("=" * 60)
     print("🚀 Starting Flask server...")
-    print(f"📡 Ollama host: {OLLAMA_HOST}")
-    print(f"🔌 Ollama port: {OLLAMA_PORT}")
+    print(f"📡 Ollama host: {OLLAMA_HOST}:{OLLAMA_PORT}")
+    print(f"🔌 Listening on: 0.0.0.0:8000")
+    print("=" * 60)
     app.run(host='0.0.0.0', port=8000, debug=True)

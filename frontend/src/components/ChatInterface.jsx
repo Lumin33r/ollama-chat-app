@@ -1,6 +1,6 @@
-import axios from 'axios';
 import { BotIcon, MenuIcon, SendIcon, UserIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import api from '../services/api';
 import './ChatInterface.css';
 
 const ChatInterface = ({
@@ -57,12 +57,16 @@ const ChatInterface = ({
         setIsLoading(true);
 
         try {
-            // Call your Flask backend API
-            const response = await axios.post('/api/chat', {
+            // Call backend API using the api service
+            const response = await api.post('/api/chat', {
                 prompt: userMessage.content,
+                model: 'llama2', // Add model parameter
                 conversation_id: conversation.id,
                 // Include conversation history for context
-                messages: conversation.messages
+                messages: conversation.messages.map(msg => ({
+                    role: msg.role,
+                    content: msg.content
+                }))
             });
 
             // Add AI response
@@ -78,11 +82,16 @@ const ChatInterface = ({
         } catch (error) {
             console.error('Error sending message:', error);
 
+            // Show detailed error message
+            const errorContent = error.response?.data?.error
+                || error.message
+                || 'Sorry, I encountered an error. Please try again.';
+
             // Add error message
             const errorMessage = {
                 id: (Date.now() + 1).toString(),
                 role: 'assistant',
-                content: 'Sorry, I encountered an error. Please try again.',
+                content: errorContent,
                 timestamp: new Date().toISOString(),
                 isError: true
             };
