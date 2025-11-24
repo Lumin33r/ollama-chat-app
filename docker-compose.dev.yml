@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  # Development backend with hot-reload
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    volumes:
+      # Mount source code for hot-reload
+      - ./backend:/app
+    environment:
+      FLASK_ENV: development
+      FLASK_DEBUG: "True"
+    command: python app.py
+
+  # Development frontend with Vite dev server
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    volumes:
+      # Mount source code for hot-reload
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      VITE_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    command: npm run dev
