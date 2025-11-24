@@ -6,10 +6,14 @@ from ollama_connector import OllamaConnector
 app = Flask(__name__)
 CORS(app)
 
-# Initialize Ollama connector
+# Get Ollama host from environment (Docker service name or localhost)
+OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'localhost')
+OLLAMA_PORT = os.getenv('OLLAMA_PORT', '11434')
+
+print(f"🤖 Connecting to Ollama at {OLLAMA_HOST}:{OLLAMA_PORT}")
+
 ollama = OllamaConnector(
-    host=os.getenv('OLLAMA_HOST', 'localhost'),
-    port=os.getenv('OLLAMA_PORT', '11434')
+    base_url=f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
 )
 
 @app.route('/health')

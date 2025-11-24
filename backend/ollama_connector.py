@@ -3,9 +3,10 @@ import json
 from typing import Dict, Any
 
 class OllamaConnector:
-    def __init__(self, host='localhost', port='11434'):
-        self.base_url = f"http://{host}:{port}"
-        self.sessions = {}  # Simple in-memory session storage
+    def __init__(self, base_url="http://localhost:11434"):
+        self.base_url = base_url
+        self.api_url = f"{base_url}/api"
+        print(f"🔗 OllamaConnector initialized: {base_url}")
 
     def generate_response(self, prompt: str, session_id: str = 'default') -> str:
         """Generate response from Ollama API"""
