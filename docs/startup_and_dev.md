@@ -6,10 +6,13 @@ A comprehensive guide for local development, git workflow, service testing, and 
 
 - [Quick Start - Daily Development Routine](#quick-start---daily-development-routine)
   - [Service Testing and Verification](#service-testing-and-verification)
+- [Quick Start - Daily Development Routine with Containers](#quick-start---daily-development-routine-with-containers)
+  - [Container Service Testing and Verification](#container-service-testing-and-verification)
 - [Initial Project Setup](#initial-project-setup)
   - [Option A: Clone Existing Repository](#option-a-clone-existing-repository)
   - [Option B: Initialize New Repository from Scratch](#option-b-initialize-new-repository-from-scratch)
 - [Local Development Environment](#local-development-environment)
+- [Development vs Production Docker Containers](#development-vs-production-docker-containers)
 - [Frontend Development Guide](#frontend-development-guide)
 - [Ollama Service Guide](#ollama-service-guide)
 - [Git Workflow & Best Practices](#git-workflow--best-practices)
@@ -826,7 +829,749 @@ A comprehensive guide for local development, git workflow, service testing, and 
 
 ---
 
+## Quick Start - Daily Development Routine with Containers
+
+### **Start of Development Session**
+
+#### **1. System Startup & Prerequisites**
+
+- [ ] **Start Docker Desktop**
+
+  ```bash
+  # From Windows Start Menu, start Docker Desktop
+  # Linux: Start Docker daemon
+  sudo systemctl start docker
+  sudo systemctl status docker  # Verify running
+
+  # Verify Docker is working
+  docker ps
+  docker version
+  docker compose version  # Verify compose plugin
+  ```
+
+- [ ] **Open VS Code in Project Directory**
+
+  ```bash
+  cd ~/codeplatoon/projects/ollama-chat-app
+  code .
+
+  # Or if already in VS Code, use: Ctrl+K Ctrl+O to open folder
+  ```
+
+#### **2. Update Local Repository**
+
+- [ ] **Sync with Remote Repository**
+
+  ```bash
+  # Check current status
+  git status
+  git branch
+
+  # Fetch latest changes from remote
+  git fetch origin
+
+  # Update main branch
+  git checkout main
+  git pull origin main
+
+  # List recent commits to see what's new
+  git log --oneline -10
+  ```
+
+- [ ] **Check for Configuration or Image Changes**
+
+  ```bash
+  # Check if Docker files changed (may need rebuild)
+  git diff HEAD@{1} HEAD -- docker-compose*.yml
+  git diff HEAD@{1} HEAD -- "*Dockerfile*"
+
+  # Check if dependencies changed
+  git diff HEAD@{1} HEAD -- backend/requirements.txt
+  git diff HEAD@{1} HEAD -- frontend/package.json
+  ```
+
+#### **3. Create or Switch to Feature Branch**
+
+- [ ] **Determine What You're Working On**
+
+  ```bash
+  # Check existing branches
+  git branch -a
+
+  # Option A: Create new feature branch
+  git checkout -b feature/your-feature-name
+  # Examples:
+  # git checkout -b feature/chat-history-persistence
+  # git checkout -b feature/user-authentication
+  # git checkout -b bugfix/cors-error-handling
+
+  # Option B: Switch to existing feature branch
+  git checkout feature/existing-branch
+
+  # Option C: Continue from where you left off
+  git checkout feature/your-current-work
+  git rebase main  # Keep branch up to date with main
+  ```
+
+#### **4. Start Development Services with Docker Compose**
+
+- [ ] **Clean Up Previous Containers (Optional)**
+
+  ```bash
+  # Check running containers
+  docker ps
+
+  # Stop and remove previous dev containers if needed
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+
+  # Optional: Remove volumes if you need fresh start
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v
+
+  # Optional: Prune unused containers/images/networks
+  docker system prune -f
+  ```
+
+- [ ] **Build or Rebuild Images (if needed)**
+
+  ```bash
+  # Rebuild if Dockerfile or dependencies changed
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml build
+
+  # Force rebuild without cache (if having issues)
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml build --no-cache
+
+  # Rebuild specific service
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml build backend
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml build frontend
+  ```
+
+- [ ] **Start All Development Services**
+
+  ```bash
+  # Start all services in development mode
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+  # Or run in detached mode (background)
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+  # Expected services:
+  # - ollama-service (port 11434)
+  # - backend (port 8000)
+  # - frontend (port 3000)
+  ```
+
+- [ ] **Verify Services are Running**
+
+  ```bash
+  # Check container status
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml ps
+
+  # Expected output:
+  # NAME                    STATUS              PORTS
+  # ollama-service          Up X minutes        0.0.0.0:11434->11434/tcp
+  # ollama-backend          Up X minutes        0.0.0.0:8000->8000/tcp
+  # ollama-frontend         Up X minutes        0.0.0.0:3000->3000/tcp
+
+  # Check logs for all services
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml logs
+
+  # Follow logs in real-time
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f
+
+  # View logs for specific service
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f backend
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f frontend
+  ```
+
+- [ ] **Test Services are Accessible**
+
+  ```bash
+  # Test backend health endpoint
+  curl http://localhost:8000/health
+  # Expected: {"status": "healthy"}
+
+  # Test frontend
+  curl -I http://localhost:3000
+  # Expected: HTTP/1.1 200 OK
+
+  # Test Ollama service
+  curl http://localhost:11434/api/tags
+  # Expected: JSON with model list
+
+  # Open frontend in browser
+  xdg-open http://localhost:3000  # Linux
+  # or manually navigate to http://localhost:3000
+  ```
+
+### **During Development Session**
+
+#### **5. Understanding Container Development Flow**
+
+- [ ] **Volume Mounts Enable Live Reload**
+
+  ```bash
+  # Your local code is mounted into containers:
+  # ./backend:/app  -> Backend container
+  # ./frontend:/app -> Frontend container
+
+  # Changes to local files are immediately reflected in containers
+  # No need to rebuild images for code changes
+  
+  # View mounted volumes
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml config | grep -A 5 volumes
+  ```
+
+- [ ] **Choose Files to Work On**
+
+  ```bash
+  # Frontend work (files auto-reload in container):
+  # - frontend/src/components/
+  # - frontend/src/App.jsx
+  # - frontend/src/index.css
+  # - frontend/vite.config.js
+
+  # Backend work (files auto-reload in container):
+  # - backend/app.py
+  # - backend/ollama_connector.py
+  # - backend/requirements.txt (requires rebuild)
+
+  # Edit files normally in VS Code
+  # Container will detect changes and reload automatically
+  ```
+
+#### **6. Development Workflow with Containers**
+
+- [ ] **Make Code Changes**
+
+  - Edit files in VS Code as normal
+  - Save frequently (`Ctrl+S`)
+  - Changes automatically sync to container via volume mount
+  - Frontend: Vite hot reload happens automatically
+  - Backend: Flask debug mode reloads on file changes
+
+- [ ] **Monitor Container Logs**
+
+  ```bash
+  # Watch all logs in real-time
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f
+
+  # Watch specific service logs
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f backend
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f frontend
+
+  # See last 50 lines of logs
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml logs --tail=50
+  ```
+
+- [ ] **Execute Commands Inside Containers**
+
+  ```bash
+  # Open bash shell in backend container
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend bash
+
+  # Inside container, you can:
+  # - Run Python commands
+  # - Install packages: pip install <package>
+  # - Run tests: pytest
+  # - Check environment: env | grep FLASK
+
+  # Open shell in frontend container
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml exec frontend sh
+
+  # Inside container, you can:
+  # - Run npm commands
+  # - Install packages: npm install <package>
+  # - Check build: npm run build
+  ```
+
+- [ ] **Check Changes as You Go**
+
+  ```bash
+  # View current code changes (same as non-container workflow)
+  git status
+  git diff
+
+  # View specific file changes
+  git diff frontend/src/App.jsx
+  git diff backend/app.py
+  ```
+
+### **Container Service Testing and Verification**
+
+#### **7A. Ollama Service Container Testing**
+
+- [ ] **Verify Ollama Container is Running**
+
+  ```bash
+  # Check ollama-service container status
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml ps ollama-service
+
+  # View ollama-service logs
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml logs ollama-service
+
+  # Check health status
+  docker inspect ollama-service --format='{{.State.Health.Status}}'
+  # Expected: healthy
+  ```
+
+- [ ] **Test Ollama API from Host**
+
+  ```bash
+  # List available models
+  curl http://localhost:11434/api/tags
+
+  # Expected output: JSON with model list
+  # {"models": [{"name": "llama2:latest", ...}]}
+
+  # Test chat functionality
+  curl -X POST http://localhost:11434/api/generate \
+    -H "Content-Type: application/json" \
+    -d '{
+      "model": "llama2",
+      "prompt": "Hello, how are you?",
+      "stream": false
+    }'
+
+  # Expected: JSON response with model output
+  ```
+
+- [ ] **Interact with Ollama Inside Container**
+
+  ```bash
+  # Execute ollama commands inside container
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml exec ollama-service ollama list
+
+  # Pull a new model
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml exec ollama-service ollama pull llama2
+
+  # Test model directly
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml exec ollama-service ollama run llama2 "What is 2+2?"
+  ```
+
+#### **7B. Backend Container Testing**
+
+- [ ] **Verify Backend Container is Running**
+
+  ```bash
+  # Check backend container status
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml ps backend
+
+  # View backend logs
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f backend
+
+  # Expected output:
+  # * Running on http://0.0.0.0:8000
+  # * Debug mode: on
+  ```
+
+- [ ] **Test Backend Health Endpoint**
+
+  ```bash
+  # Test from host
+  curl http://localhost:8000/health
+
+  # Expected response:
+  # {"status":"healthy"}
+
+  # Check response code
+  curl -I http://localhost:8000/health
+  # Expected: HTTP/1.1 200 OK
+  ```
+
+- [ ] **Test Backend Chat Endpoint**
+
+  ```bash
+  # Test basic chat functionality
+  curl -X POST http://localhost:8000/chat \
+    -H "Content-Type: application/json" \
+    -d '{
+      "prompt": "What is artificial intelligence?",
+      "session_id": "test-session-123"
+    }'
+
+  # Expected: JSON response with AI-generated text
+  # {"response": "Artificial intelligence is...", "session_id": "test-session-123"}
+  ```
+
+- [ ] **Run Commands Inside Backend Container**
+
+  ```bash
+  # Open bash shell in backend container
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend bash
+
+  # Inside container:
+  # Check Python version
+  python --version
+
+  # List installed packages
+  pip list
+
+  # Run tests
+  pytest tests/ -v
+
+  # Test imports
+  python -c "import app; print('Backend OK')"
+
+  # Exit container
+  exit
+  ```
+
+#### **7C. Frontend Container Testing**
+
+- [ ] **Verify Frontend Container is Running**
+
+  ```bash
+  # Check frontend container status
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml ps frontend
+
+  # View frontend logs (see Vite output)
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f frontend
+
+  # Expected output:
+  # VITE v5.4.21  ready in XXX ms
+  # ➜  Local:   http://localhost:3000/
+  ```
+
+- [ ] **Test Frontend Accessibility**
+
+  ```bash
+  # Test frontend loads
+  curl -I http://localhost:3000
+
+  # Expected: HTTP/1.1 200 OK with HTML content-type
+
+  # Open in browser
+  xdg-open http://localhost:3000  # Linux
+  # or manually navigate in browser
+  ```
+
+- [ ] **Run Frontend Commands Inside Container**
+
+  ```bash
+  # Open shell in frontend container
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml exec frontend sh
+
+  # Inside container:
+  # List node modules
+  ls node_modules/
+
+  # Run linter
+  npm run lint
+
+  # Build for production
+  npm run build
+
+  # Check Node version
+  node --version
+
+  # Exit container
+  exit
+  ```
+
+#### **7D. Integration Testing with Containers**
+
+- [ ] **End-to-End Container Testing**
+
+  1. **Verify All Containers Running**
+
+     ```bash
+     docker compose -f docker-compose.yml -f docker-compose.dev.yml ps
+     # Should show 3 services: ollama-service, backend, frontend
+     ```
+
+  2. **Test Container Networking**
+
+     ```bash
+     # Backend should reach Ollama via container network
+     docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend curl http://ollama-service:11434/api/tags
+
+     # Expected: JSON with model list (proves inter-container networking works)
+     ```
+
+  3. **Test Full User Flow**
+     - Open frontend: http://localhost:3000
+     - Enter chat message
+     - Verify message sent to backend (check Network tab)
+     - Verify backend calls Ollama (check backend logs)
+     - Verify response displayed in frontend
+
+  4. **Monitor All Logs Simultaneously**
+     ```bash
+     # Watch all service logs together
+     docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f
+     # Send a chat message and watch the request flow through all services
+     ```
+
+#### **7E. Pre-Commit Testing with Containers**
+
+- [ ] **Frontend Testing in Container**
+
+  ```bash
+  # Run linter inside container
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml exec frontend npm run lint
+
+  # Fix auto-fixable issues
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml exec frontend npm run lint -- --fix
+
+  # Build for production
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml exec frontend npm run build
+  ```
+
+- [ ] **Backend Testing in Container**
+
+  ```bash
+  # Run unit tests
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend pytest tests/ -v
+
+  # Check imports
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend python -c "import app; print('Backend OK')"
+
+  # Test API endpoints
+  curl http://localhost:8000/health
+  curl -X POST http://localhost:8000/chat \
+    -H "Content-Type: application/json" \
+    -d '{"prompt": "test", "session_id": "test"}'
+  ```
+
+### **Committing Your Work**
+
+#### **8. Stage and Review Changes**
+
+- [ ] **Review What Changed**
+
+  ```bash
+  # See all changes (code files, not containers)
+  git status
+
+  # Review changes in detail
+  git diff
+
+  # Review staged changes
+  git diff --cached
+  ```
+
+- [ ] **Stage Specific Files**
+
+  ```bash
+  # Stage specific files (RECOMMENDED)
+  git add frontend/src/components/NewComponent.jsx
+  git add backend/app.py
+
+  # If you modified Docker configuration
+  git add docker-compose.yml
+  git add docker-compose.dev.yml
+  git add backend/Dockerfile
+  git add frontend/Dockerfile.dev
+
+  # If you added dependencies
+  git add backend/requirements.txt
+  git add frontend/package.json
+  git add frontend/package-lock.json
+
+  # Verify what's staged
+  git status
+  ```
+
+- [ ] **Review Before Committing**
+
+  ```bash
+  # Double-check staged changes
+  git diff --staged
+
+  # If you staged something by mistake
+  git reset HEAD <filename>  # Unstage specific file
+  ```
+
+#### **9. Commit with Good Message**
+
+- [ ] **Write Descriptive Commit Message**
+
+  ```bash
+  # Use conventional commit format
+  git commit -m "feat: add message persistence to chat interface
+
+  - Implement localStorage integration for chat history
+  - Add conversation save/load functionality
+  - Update ChatInterface component with auto-save
+  - Update Docker dev environment for testing
+  - Add error handling for storage quota exceeded
+
+  Closes #42"
+
+  # Commit types:
+  # feat:     New feature
+  # fix:      Bug fix
+  # docs:     Documentation changes
+  # style:    Formatting, missing semicolons, etc.
+  # refactor: Code restructuring
+  # test:     Adding tests
+  # chore:    Maintenance tasks (dependencies, Docker config)
+  ```
+
+- [ ] **Verify Commit**
+
+  ```bash
+  # Check commit was created
+  git log --oneline -1
+
+  # View commit details
+  git show HEAD
+  ```
+
+### **Syncing Your Work**
+
+#### **10. Push to Remote Repository**
+
+- [ ] **Push Your Branch**
+
+  ```bash
+  # First time pushing this branch
+  git push -u origin feature/your-feature-name
+
+  # Subsequent pushes
+  git push
+
+  # Verify push succeeded
+  git status  # Should say "up to date with origin/..."
+  ```
+
+- [ ] **Handle Push Rejections**
+
+  ```bash
+  # If remote has changes you don't have
+  git pull --rebase origin feature/your-feature-name
+
+  # Resolve any conflicts if they occur
+  # Then push again
+  git push
+  ```
+
+### **End of Session Checklist**
+
+#### **11. Create Pull Request (if ready)**
+
+- [ ] **Open GitHub PR**
+  - Go to repository on GitHub
+  - Click "Compare & pull request" button
+  - Fill in PR template:
+    - **Title**: Clear, descriptive title
+    - **Description**: What changed and why
+    - **Testing**: Specify tested in Docker dev environment
+    - **Screenshots**: If UI changes
+  - Link related issues: "Closes #42"
+  - Request reviewers
+  - Add labels (feature, bug, etc.)
+
+#### **12. Clean Up Containers**
+
+- [ ] **Stop Development Containers**
+
+  ```bash
+  # Stop all containers (preserves volumes)
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml stop
+
+  # Or stop and remove containers
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+
+  # Stop and remove containers AND volumes (fresh start next time)
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v
+
+  # View remaining containers
+  docker ps -a
+  ```
+
+- [ ] **Optional: Clean Up Docker Resources**
+
+  ```bash
+  # Remove stopped containers
+  docker container prune -f
+
+  # Remove unused images
+  docker image prune -f
+
+  # Remove unused volumes
+  docker volume prune -f
+
+  # Remove all unused resources (be careful!)
+  docker system prune -af
+  ```
+
+- [ ] **Save VS Code Workspace State**
+
+  - VS Code auto-saves workspace
+  - Close VS Code or leave open for next session
+
+- [ ] **Document Your Progress**
+  ```bash
+  # Optional: Add notes for next session
+  # Update GitHub issue with status comment
+  # Update project board
+  # Document any blockers or questions
+  ```
+
+### **Next Session Quick Start**
+
+#### **13. Resume Development with Containers**
+
+- [ ] **Start Docker** (if not running)
+- [ ] **Open VS Code** in project folder
+- [ ] **Update main branch**
+
+  ```bash
+  git checkout main
+  git pull origin main
+  ```
+
+- [ ] **Switch to your feature branch**
+
+  ```bash
+  git checkout feature/your-feature-name
+  git rebase main  # Keep up to date
+  ```
+
+- [ ] **Start containers**
+
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+  ```
+
+- [ ] **Continue coding!**
+
+---
+
 ### **Quick Reference Commands**
+
+#### **Essential Docker Compose Commands**
+
+```bash
+# Start services (development mode)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d  # detached
+
+# Stop services
+docker compose -f docker-compose.yml -f docker-compose.dev.yml stop
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down     # remove containers
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v  # remove volumes too
+
+# Rebuild services
+docker compose -f docker-compose.yml -f docker-compose.dev.yml build
+docker compose -f docker-compose.yml -f docker-compose.dev.yml build --no-cache
+
+# View logs
+docker compose -f docker-compose.yml -f docker-compose.dev.yml logs
+docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f           # follow
+docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f backend  # specific service
+
+# Check status
+docker compose -f docker-compose.yml -f docker-compose.dev.yml ps
+
+# Execute commands in containers
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec backend bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec frontend sh
+
+# Restart specific service
+docker compose -f docker-compose.yml -f docker-compose.dev.yml restart backend
+```
 
 #### **Essential Git Commands**
 
@@ -1301,6 +2046,798 @@ curl -X POST http://localhost:3000/api/health
 # Open application in browser
 xdg-open http://localhost:3000
 ```
+
+---
+
+## Development vs Production Docker Containers
+
+### **Table of Contents**
+
+This comprehensive section explains:
+
+1. [Why Two Sets of Containers?](#why-two-sets-of-containers) - Different priorities (speed vs security/performance)
+2. [Key Differences Explained](#key-differences-explained) - File watching, image size, logging, security, database, resources, health checks
+3. [Complete Docker Compose Examples](#complete-docker-compose-examples) - Base + dev + prod compose files from our project
+4. [Dockerfile Architecture](#dockerfile-architecture) - Separate dev and prod Dockerfiles
+5. [Development Workflow](#development-workflow-with-docker) - How to use dev environment
+6. [Production Workflow](#production-workflow-with-docker) - How to build and deploy prod
+7. [Cost & Performance Impact](#cost--performance-impact) - Real-world comparison
+8. [When to Rebuild](#when-to-rebuild-containers) - Dev vs prod rebuild strategies
+9. [Summary Comparison Table](#summary-dev-vs-prod-containers) - Quick reference
+10. [Best Practices](#container-best-practices) - Dos and don'ts
+
+---
+
+### Why Two Sets of Containers?
+
+Development and production containers serve **fundamentally different purposes** and operate in different environments with different priorities.
+
+```
+Development Priority: Fast iteration, debugging, convenience
+Production Priority: Security, performance, reliability, cost
+
+┌─────────────────────────────────────────────────────┐
+│  Development Containers (docker-compose.dev.yml)    │
+│  Goal: Make development fast and easy               │
+│  - Hot reload (code changes reflect immediately)    │
+│  - Debug tools included                             │
+│  - Verbose logging                                  │
+│  - Permissive security                              │
+│  - Runs on your laptop                              │
+└─────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────┐
+│  Production Containers (docker-compose.prod.yml)    │
+│  Goal: Optimize for performance, security, cost     │
+│  - Compiled/optimized code                          │
+│  - Minimal image size                               │
+│  - Production logging                               │
+│  - Strict security                                  │
+│  - Runs on AWS EC2                                  │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
+### Key Differences Explained
+
+#### **1. File Watching & Hot Reload**
+
+**Development:**
+
+```yaml
+# docker-compose.dev.yml
+services:
+  frontend:
+    volumes:
+      - ./frontend:/app # Mount source code
+      - /app/node_modules # Preserve node_modules
+    command: npm run dev # Vite dev server with HMR
+```
+
+**Why:** Code changes appear instantly without rebuilding. Essential for fast iteration.
+
+**Production:**
+
+```yaml
+# docker-compose.prod.yml
+services:
+  frontend:
+    # NO volumes mounted
+    # Code baked into image during build
+```
+
+**Why:** Pre-built static files are faster, more secure, and don't need the dev server overhead.
+
+---
+
+#### **2. Image Size & Build Strategy**
+
+**Development Dockerfile:**
+
+```dockerfile
+# frontend/Dockerfile.dev
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install ALL dependencies (including devDependencies)
+RUN npm install
+
+# Copy source code
+COPY . .
+
+# Expose Vite dev server port
+EXPOSE 3000
+
+# Start dev server
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+
+# Image size: ~350MB (includes all dev dependencies)
+```
+
+**Production Dockerfile (Multi-stage):**
+
+```dockerfile
+# frontend/Dockerfile
+# Stage 1: Build
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy source code
+COPY . .
+
+# Build argument for API URL
+ARG VITE_API_URL=http://localhost:8000
+ENV VITE_API_URL=$VITE_API_URL
+
+# Build optimized static files
+RUN npm run build
+
+# Stage 2: Serve with nginx
+FROM nginx:stable-alpine
+
+# Copy ONLY built files from builder stage
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Copy nginx configuration
+COPY nginx.conf /etc/nginx/nginx.conf
+
+# Expose port
+EXPOSE 80
+
+# Start nginx
+CMD ["nginx", "-g", "daemon off;"]
+
+# Image size: ~25MB (85% smaller!)
+```
+
+**Why:** Smaller images = faster deploys, lower bandwidth costs, reduced attack surface.
+
+---
+
+#### **3. Logging & Debugging**
+
+**Development:**
+
+```yaml
+# docker-compose.dev.yml
+services:
+  backend:
+    environment:
+      FLASK_ENV: development
+      FLASK_DEBUG: "True" # Enable Flask debugger
+    command: python app.py # Development server with auto-reload
+```
+
+**Production:**
+
+```yaml
+# docker-compose.prod.yml
+services:
+  backend:
+    environment:
+      FLASK_ENV: production
+      FLASK_DEBUG: "False" # Disable debug mode (security risk)
+    command: gunicorn --bind 0.0.0.0:8000 --workers 4 app:app
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+**Why:** Verbose dev logs help debugging. Production logs are concise, structured, and rotated to prevent disk fill.
+
+---
+
+#### **4. Resource Limits**
+
+**Development:**
+
+```yaml
+# docker-compose.dev.yml
+services:
+  ollama-service:
+    # No resource limits - use all available resources
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+```
+
+**Production:**
+
+```yaml
+# docker-compose.prod.yml
+services:
+  ollama-service:
+    deploy:
+      resources:
+        limits:
+          memory: 8G # Maximum memory usage
+        reservations:
+          memory: 4G # Minimum guaranteed memory
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+**Why:** Dev can use all resources. Prod limits prevent resource exhaustion and enable predictable scaling.
+
+---
+
+#### **5. Health Checks & Restart Policies**
+
+**Development:**
+
+```yaml
+# docker-compose.yml (base config)
+services:
+  backend:
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+```
+
+**Production:**
+
+```yaml
+# docker-compose.prod.yml
+services:
+  backend:
+    deploy:
+      replicas: 2 # Run 2 instances for high availability
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+**Why:** Prod needs automatic recovery, health monitoring, and redundancy for zero-downtime deployments.
+
+---
+
+### Complete Docker Compose Examples
+
+Our project uses a **three-file strategy**: base + environment-specific overrides.
+
+#### **Base Configuration (docker-compose.yml)**
+
+```yaml
+version: "3.8"
+
+# Shared network for all services
+networks:
+  ollama-network:
+    driver: bridge
+
+# Persistent volumes
+volumes:
+  ollama-models:
+    driver: local
+
+services:
+  ollama-service:
+    image: ollama/ollama:latest
+    container_name: ollama-service
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - ollama-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ollama-backend
+    ports:
+      - "8000:8000"
+    environment:
+      OLLAMA_HOST: ollama-service
+      OLLAMA_PORT: 11434
+    depends_on:
+      ollama-service:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ollama-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ollama-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - ollama-network
+```
+
+#### **Development Overrides (docker-compose.dev.yml)**
+
+```yaml
+version: "3.8"
+
+services:
+  # Development backend with hot-reload
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    volumes:
+      # Mount source code for hot-reload
+      - ./backend:/app
+    environment:
+      FLASK_ENV: development
+      FLASK_DEBUG: "True"
+    command: python app.py
+
+  # Development frontend with Vite dev server
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    volumes:
+      # Mount source code for hot-reload
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      VITE_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    command: npm run dev
+```
+
+#### **Production Overrides (docker-compose.prod.yml)**
+
+```yaml
+version: "3.8"
+
+services:
+  ollama-service:
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 4G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+      replicas: 2 # High availability
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+      replicas: 2 # High availability
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+---
+
+### Dockerfile Architecture
+
+#### **Backend Dockerfile (Production)**
+
+```dockerfile
+# backend/Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Expose Flask port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run with gunicorn for production
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "app:app"]
+```
+
+**Key Features:**
+
+- Single-stage (simpler for backend)
+- Includes curl for health checks
+- Uses gunicorn for production WSGI server
+- Health check built into image
+
+#### **Frontend Development Dockerfile**
+
+```dockerfile
+# frontend/Dockerfile.dev
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy source code
+COPY . .
+
+# Expose Vite dev server port
+EXPOSE 3000
+
+# Start Vite dev server
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+```
+
+**Key Features:**
+
+- Simple single-stage
+- Includes all dev dependencies
+- Runs Vite dev server
+- Source code mounted via volume for hot reload
+
+#### **Frontend Production Dockerfile (Multi-stage)**
+
+```dockerfile
+# frontend/Dockerfile
+# Multi-stage build
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy source code
+COPY . .
+
+# Build argument for API URL
+ARG VITE_API_URL=http://localhost:8000
+ENV VITE_API_URL=$VITE_API_URL
+
+# Build React app
+RUN npm run build
+
+# Production stage
+FROM nginx:stable-alpine
+
+# Copy built files
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Copy nginx configuration
+COPY nginx.conf /etc/nginx/nginx.conf
+
+# Expose port
+EXPOSE 80
+
+# Start nginx
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+**Key Features:**
+
+- Two-stage build (builder + nginx)
+- Discards build tools and dependencies
+- Uses nginx for efficient static file serving
+- Configurable API URL at build time
+
+---
+
+### Development Workflow with Docker
+
+#### **Start Development Environment**
+
+```bash
+cd ~/codeplatoon/projects/ollama-chat-app
+
+# Start dev environment
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+# Or detached mode
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+# View logs
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml logs -f
+
+# Stop services
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml down
+```
+
+#### **Development Features**
+
+- **Hot Reload:** Changes to `frontend/src/` reflect instantly
+- **Auto-restart:** Backend restarts when code changes
+- **Verbose Logs:** See detailed debug information
+- **No Rebuilds:** Most code changes don't require image rebuild
+
+#### **When to Rebuild Dev Images**
+
+```bash
+# Rebuild when:
+# - package.json changes (new npm packages)
+# - requirements.txt changes (new Python packages)
+# - Dockerfile changes
+
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+```
+
+---
+
+### Production Workflow with Docker
+
+#### **Build Production Images**
+
+```bash
+cd ~/codeplatoon/projects/ollama-chat-app
+
+# Build production images
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
+
+# Build with specific API URL
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml build \
+  --build-arg VITE_API_URL=https://api.yourdomain.com
+
+# View built images
+docker images | grep ollama
+```
+
+#### **Test Production Build Locally**
+
+```bash
+# Start production environment locally
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+
+# Test endpoints
+curl http://localhost:8000/health
+curl http://localhost:3000
+
+# Stop when done
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml down
+```
+
+#### **Tag and Push to Registry**
+
+```bash
+# Tag images
+docker tag ollama-chat-app-frontend:latest your-registry/ollama-frontend:v1.0.0
+docker tag ollama-chat-app-backend:latest your-registry/ollama-backend:v1.0.0
+
+# Push to registry
+docker push your-registry/ollama-frontend:v1.0.0
+docker push your-registry/ollama-backend:v1.0.0
+```
+
+#### **Deploy to AWS EC2**
+
+```bash
+# SSH to EC2 instance
+ssh -i ~/.ssh/your-key.pem ubuntu@<EC2_PUBLIC_IP>
+
+# On remote instance:
+# Pull images
+docker pull your-registry/ollama-frontend:v1.0.0
+docker pull your-registry/ollama-backend:v1.0.0
+
+# Update docker-compose.yml with new image tags
+
+# Start production containers
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# Verify deployment
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml ps
+curl http://localhost:8000/health
+```
+
+---
+
+### Cost & Performance Impact
+
+| Aspect                      | Development         | Production                    |
+| --------------------------- | ------------------- | ----------------------------- |
+| **Frontend Image Size**     | 350MB               | 25MB (93% smaller)            |
+| **Backend Image Size**      | 450MB               | 250MB (44% smaller)           |
+| **Memory Usage (Frontend)** | 1GB                 | 100MB                         |
+| **Memory Usage (Backend)**  | 500MB               | 200MB                         |
+| **CPU Usage**               | High (hot reload)   | Low (optimized)               |
+| **Startup Time**            | 30 seconds          | 5 seconds                     |
+| **Request Latency**         | 200ms (dev server)  | 10ms (nginx)                  |
+| **Build Time**              | 3 minutes           | 5 minutes (multi-stage)       |
+| **Monthly Cost**            | $0 (local)          | $50-500 (EC2)                 |
+| **Deploy Time**             | Instant (no deploy) | 10 minutes (build + transfer) |
+
+---
+
+### When to Rebuild Containers
+
+#### **Development**
+
+```bash
+# Rebuild when:
+# ✅ package.json changes (new npm packages)
+# ✅ requirements.txt changes (new Python packages)
+# ✅ Dockerfile changes
+
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml build
+
+# For most code changes: ❌ NO rebuild needed
+# Volumes auto-sync changes
+```
+
+#### **Production**
+
+```bash
+# Rebuild for EVERY code change (no volumes)
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
+
+# Tag with version
+docker tag ollama-frontend:latest your-registry/ollama-frontend:v1.0.1
+
+# Push and deploy
+docker push your-registry/ollama-frontend:v1.0.1
+```
+
+---
+
+### Summary: Dev vs Prod Containers
+
+| Feature             | Development                   | Production                      |
+| ------------------- | ----------------------------- | ------------------------------- |
+| **Purpose**         | Fast iteration                | Optimized performance           |
+| **Source Code**     | Mounted as volume             | Baked into image                |
+| **Dependencies**    | All (including dev tools)     | Production only                 |
+| **Hot Reload**      | ✅ Yes                        | ❌ No                           |
+| **Image Size**      | Large (350MB+)                | Small (25-250MB)                |
+| **Build Strategy**  | Single stage                  | Multi-stage                     |
+| **Logging**         | Verbose (DEBUG)               | Concise (WARNING)               |
+| **Security**        | Permissive                    | Strict                          |
+| **Restart Policy**  | unless-stopped                | unless-stopped + replicas       |
+| **Health Checks**   | Basic                         | Comprehensive                   |
+| **Resource Limits** | None                          | Strict limits                   |
+| **Where It Runs**   | Your laptop                   | AWS EC2                         |
+| **How to Start**    | `docker-compose.dev.yml up`   | `docker-compose.prod.yml up -d` |
+| **When to Rebuild** | Only when dependencies change | Every code change               |
+| **Cost**            | $0 (local)                    | $50-500/month                   |
+
+---
+
+### Container Best Practices
+
+#### **✅ DO**
+
+- Use multi-stage Dockerfiles for production
+- Mount source code in dev, bake into image in prod
+- Use specific version tags in prod (`v1.0.0`, not `latest`)
+- Enable health checks in production
+- Use resource limits in production
+- Test prod images locally before deploying
+- Use `.dockerignore` to exclude unnecessary files
+- Run containers as non-root in production (when possible)
+
+#### **❌ DON'T**
+
+- Use dev images in production
+- Use `latest` tag in production
+- Mount source code volumes in production
+- Skip health checks in production
+- Hardcode secrets in Dockerfiles
+- Ignore image size optimization
+- Commit `.env` files to git
+- Run production without resource limits
+
+#### **Testing Production Images Locally**
+
+```bash
+# Build production images
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
+
+# Run locally (simulate production)
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+
+# Test endpoints
+curl http://localhost:8000/health
+curl http://localhost:3000
+
+# Check image sizes
+docker images | grep ollama
+
+# Check resource usage
+docker stats
+
+# Stop when done
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml down
+```
+
+This ensures your production images work correctly BEFORE deploying to AWS, preventing costly mistakes and downtime! 🚀
 
 ---
 
