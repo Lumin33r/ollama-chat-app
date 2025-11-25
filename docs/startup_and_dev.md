@@ -1813,10 +1813,10 @@ watcher.on("change", (path) => {
 services:
   backend:
     volumes:
-      - ./backend:/app # MOUNTED (live sync)
+      - ./backend:/src # MOUNTED (live sync)
     environment:
       - FLASK_DEBUG=1
-    command: python app.py # Development server with auto-reload
+    command: python src/app.py # Development server with auto-reload
 ```
 
 **What happens:**
@@ -2727,8 +2727,8 @@ Production Priority: Security, performance, reliability, cost
 services:
   frontend:
     volumes:
-      - ./frontend:/app # Mount source code
-      - /app/node_modules # Preserve node_modules
+      - ./frontend:/src # Mount source code
+      - /node_modules # Preserve node_modules
     command: npm run dev # Vite dev server with HMR
 ```
 
@@ -2756,7 +2756,7 @@ services:
 # frontend/Dockerfile.dev
 FROM node:18-alpine
 
-WORKDIR /app
+WORKDIR /src
 
 # Copy package files
 COPY package*.json ./
@@ -2783,7 +2783,7 @@ CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
 # Stage 1: Build
 FROM node:18-alpine AS builder
 
-WORKDIR /app
+WORKDIR /src
 
 # Copy package files
 COPY package*.json ./
@@ -3036,11 +3036,11 @@ services:
       dockerfile: Dockerfile
     volumes:
       # Mount source code for hot-reload
-      - ./backend:/app
+      - ./backend:/src
     environment:
       FLASK_ENV: development
       FLASK_DEBUG: "True"
-    command: python app.py
+    command: python src/app.py
 
   # Development frontend with Vite dev server
   frontend:
@@ -3049,7 +3049,7 @@ services:
       dockerfile: Dockerfile.dev
     volumes:
       # Mount source code for hot-reload
-      - ./frontend:/app
+      - ./frontend:/src
       - /app/node_modules
     environment:
       VITE_API_URL: http://localhost:8000
@@ -3154,7 +3154,7 @@ CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "app:app"]
 # frontend/Dockerfile.dev
 FROM node:18-alpine
 
-WORKDIR /app
+WORKDIR /src
 
 # Copy package files
 COPY package*.json ./
@@ -3186,7 +3186,7 @@ CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
 # Multi-stage build
 FROM node:18-alpine AS builder
 
-WORKDIR /app
+WORKDIR /src
 
 # Copy package files
 COPY package*.json ./
