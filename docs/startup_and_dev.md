@@ -8,6 +8,7 @@ A comprehensive guide for local development, git workflow, service testing, and 
   - [Service Testing and Verification](#service-testing-and-verification)
 - [Quick Start - Daily Development Routine with Containers](#quick-start---daily-development-routine-with-containers)
   - [Container Service Testing and Verification](#container-service-testing-and-verification)
+- [How Mounted Volumes Work in Docker with Running Containers](#how-mounted-volumes-work-in-docker-with-running-containers)
 - [Initial Project Setup](#initial-project-setup)
   - [Option A: Clone Existing Repository](#option-a-clone-existing-repository)
   - [Option B: Initialize New Repository from Scratch](#option-b-initialize-new-repository-from-scratch)
@@ -1016,7 +1017,7 @@ A comprehensive guide for local development, git workflow, service testing, and 
 
   # Changes to local files are immediately reflected in containers
   # No need to rebuild images for code changes
-  
+
   # View mounted volumes
   docker compose -f docker-compose.yml -f docker-compose.dev.yml config | grep -A 5 volumes
   ```
@@ -1289,6 +1290,7 @@ A comprehensive guide for local development, git workflow, service testing, and 
      ```
 
   3. **Test Full User Flow**
+
      - Open frontend: http://localhost:3000
      - Enter chat message
      - Verify message sent to backend (check Network tab)
@@ -1572,6 +1574,621 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml exec frontend sh
 # Restart specific service
 docker compose -f docker-compose.yml -f docker-compose.dev.yml restart backend
 ```
+
+---
+
+## How Mounted Volumes Work in Docker with Running Containers
+
+### **The Big Picture**
+
+Mounted volumes create a **live connection** between your host filesystem and the container's filesystem. Think of it like a "portal" or "window" between two worlds.
+
+```
+┌─────────────────────────────────────────────────────┐
+│              Your Computer (Host)                    │
+│                                                      │
+│  ~/codeplatoon/projects/ollama-chat-app/            │
+│  ├── frontend/                                       │
+│  │   ├── src/                                        │
+│  │   │   ├── App.jsx         ◄──────────┐           │
+│  │   │   └── components/               │           │
+│  │   └── package.json                  │           │
+│  └── backend/                           │           │
+│      ├── app.py               ◄─────────┤           │
+│      └── ollama_connector.py            │           │
+│                                         │           │
+└─────────────────────────────────────────┼───────────┘
+                                         │
+                    VOLUME MOUNT (bind mount)
+                    Real-time synchronization
+                                         │
+┌─────────────────────────────────────────┼───────────┐
+│         Docker Container                │           │
+│                                         │           │
+│  /src/                                  │           │
+│  ├── src/                               │           │
+│  │   ├── App.jsx         ◄──────────────┘           │
+│  │   └── components/                                │
+│  └── package.json                                   │
+│                                                      │
+│  Changes to files are IMMEDIATELY visible           │
+│  in BOTH locations (host and container)             │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
+### **Types of Volume Mounts**
+
+Docker supports three types of mounts:
+
+#### **1. Bind Mounts (What We Use in Dev)**
+
+```yaml
+# docker-compose.dev.yml
+services:
+  frontend:
+    volumes:
+      - ./frontend:/src # Bind mount
+      # Maps: ./frontend (host) → /src (container)
+```
+
+**How it works:**
+
+- **Host directory** `./frontend` is mounted **into** container at `/src`
+- Files exist in **one place** on disk (your host)
+- Container sees them as if they were inside `/src`
+- Changes in **either location** are instantly visible in **both**
+
+**Analogy:** It's like creating a shortcut/symlink. The files aren't copied; the container just "looks through" to your host filesystem.
+
+#### **2. Named Volumes (For Persistent Data)**
+
+```yaml
+# docker-compose.yml
+services:
+  ollama-service:
+    volumes:
+      - ollama-models:/root/.ollama # Named volume
+
+volumes:
+  ollama-models: # Docker manages this volume
+    driver: local
+```
+
+**How it works:**
+
+- Docker creates and manages the volume
+- Stored in Docker's data directory: `/var/lib/docker/volumes/`
+- Data persists even when container is deleted
+- Not directly accessible from host (without Docker commands)
+
+**Use cases:**
+
+- Database data
+- Application state
+- Uploaded files
+- Model weights (Ollama models)
+
+#### **3. Anonymous Volumes (Temporary Data)**
+
+```yaml
+services:
+  frontend:
+    volumes:
+      - /src/node_modules # Anonymous volume
+```
+
+**How it works:**
+
+- Docker creates a temporary volume
+- Automatically deleted when container is removed
+- Used to prevent host files from overwriting container files
+
+---
+
+### **Live Reload Magic: How It Actually Works**
+
+#### **Development Scenario (Hot Reload)**
+
+```yaml
+# docker-compose.dev.yml
+services:
+  frontend:
+    volumes:
+      - ./frontend:/src # Mount source code
+      - /src/node_modules # Preserve node_modules
+    command: npm run dev
+```
+
+**Step-by-Step Process:**
+
+```
+1. You edit App.jsx in VS Code on your host
+   ~/codeplatoon/projects/ollama-chat-app/frontend/src/App.jsx
+
+   ↓
+
+2. File change is IMMEDIATELY written to disk
+   (Your host filesystem)
+
+   ↓
+
+3. Because ./frontend is mounted to /src in container,
+   the container IMMEDIATELY sees the change at:
+   /src/src/App.jsx
+
+   ↓
+
+4. Vite dev server (running inside container) has
+   file watchers that detect the change
+
+   ↓
+
+5. Vite triggers Hot Module Replacement (HMR)
+   - Recompiles only changed module
+   - Pushes update to browser via WebSocket
+
+   ↓
+
+6. Browser updates UI WITHOUT full page reload
+
+   Total time: < 1 second
+```
+
+**Why This is Fast:**
+
+- ✅ No image rebuild needed
+- ✅ No container restart needed
+- ✅ Only changed files are recompiled
+- ✅ Browser state is preserved
+
+---
+
+### **Volume Mount Mechanics**
+
+#### **Behind the Scenes (Linux)**
+
+When you mount `./frontend:/src`:
+
+```bash
+# Docker creates a bind mount using Linux kernel features
+
+# Check mounts in running container
+docker compose exec frontend mount | grep /src
+
+# Output:
+# /dev/sda1 on /src type ext4 (rw,relatime)
+# This shows /src is actually pointing to your host disk
+```
+
+**Kernel-level Operations:**
+
+1. Docker uses **Linux namespaces** to isolate container filesystem
+2. Bind mount uses **VFS (Virtual File System)** layer
+3. Container's `/src` directory becomes a **mount point**
+4. Inode pointers redirect to host filesystem location
+5. File operations (read/write) go directly to host disk
+
+#### **File Watching in Containers**
+
+```javascript
+// Vite dev server (inside container)
+import { watch } from "chokidar";
+
+// Watches /src/src for changes
+const watcher = watch("/src/src/**/*.{js,jsx,ts,tsx}", {
+  ignoreInitial: true,
+  persistent: true,
+});
+
+watcher.on("change", (path) => {
+  console.log(`File changed: ${path}`);
+  // Trigger hot reload
+  hmr.send({ type: "update", path });
+});
+```
+
+**File System Events:**
+
+```
+1. You save App.jsx
+   ↓
+2. Host OS fires inotify event (Linux)
+   ↓
+3. Event propagates through mount point
+   ↓
+4. Chokidar (in container) receives event
+   ↓
+5. Vite triggers recompile
+```
+
+---
+
+### **Production vs Development Volumes**
+
+#### **Development (docker-compose.dev.yml)**
+
+```yaml
+services:
+  backend:
+    volumes:
+      - ./backend:/app # MOUNTED (live sync)
+    environment:
+      - FLASK_DEBUG=1
+    command: python app.py # Development server with auto-reload
+```
+
+**What happens:**
+
+```
+Edit app.py on host
+    ↓
+Change visible in container immediately
+    ↓
+Flask detects change (werkzeug reloader)
+    ↓
+Flask restarts server
+    ↓
+Total time: 1-2 seconds
+```
+
+#### **Production (docker-compose.prod.yml)**
+
+```yaml
+services:
+  backend:
+    # NO volumes!
+    # Code baked into image during build
+    command: gunicorn app:app # Production WSGI server
+```
+
+**What happens:**
+
+```
+Edit app.py on host
+    ↓
+NO EFFECT on running container!
+    ↓
+Must rebuild image:
+    docker compose build backend
+    ↓
+Redeploy container:
+    docker compose up -d backend
+    ↓
+Total time: 2-5 minutes
+```
+
+---
+
+### **Volume Mount Patterns in Your Project**
+
+#### **Frontend Volume Strategy**
+
+```yaml
+# docker-compose.dev.yml
+services:
+  frontend:
+    volumes:
+      - ./frontend:/src # Mount source code
+      - /src/node_modules # IMPORTANT: Preserve node_modules
+```
+
+**Why `/src/node_modules` exception?**
+
+```
+Problem without it:
+┌────────────────────────────────────────┐
+│ Host: ./frontend/                      │
+│  ├── src/                              │
+│  ├── package.json                      │
+│  └── node_modules/  (empty or wrong)  │ ◄─ This overwrites...
+└────────────────────────────────────────┘
+                  ↓ Mount
+┌────────────────────────────────────────┐
+│ Container: /src/                       │
+│  ├── src/                              │
+│  ├── package.json                      │
+│  └── node_modules/  (installed inside)│ ◄─ ...this! (breaks build)
+└────────────────────────────────────────┘
+
+Solution with anonymous volume:
+┌────────────────────────────────────────┐
+│ Host: ./frontend/                      │
+│  ├── src/           ─────────┐         │
+│  ├── package.json   ─────────┼─────────┼─ Mounted
+│  └── node_modules/  (ignored)│         │
+└──────────────────────────────┼─────────┘
+                              │
+                              ↓ Mount
+┌──────────────────────────────┼─────────┐
+│ Container: /src/            │         │
+│  ├── src/           ◄───────┘         │
+│  ├── package.json   ◄─────────────────┘
+│  └── node_modules/  (preserved in anonymous volume)
+└────────────────────────────────────────┘
+```
+
+**Effect:**
+
+- ✅ Source code syncs (live reload)
+- ✅ node_modules preserved (correct dependencies)
+- ✅ No conflicts between host and container packages
+
+#### **Backend Volume Strategy**
+
+```yaml
+# docker-compose.dev.yml
+services:
+  backend:
+    volumes:
+      - ./backend:/app # Mount Python code
+      # No need for __pycache__ exception (Python auto-handles)
+```
+
+**Python-specific behavior:**
+
+- `__pycache__/` directories are created on-demand
+- `.pyc` files are bytecode (platform-independent)
+- Flask reloader detects `.py` file changes
+- No dependency conflicts (pip installs in container's venv)
+
+---
+
+### **Practical Examples**
+
+#### **Example 1: Edit Frontend Code**
+
+```bash
+# Start dev environment
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+# In VS Code, edit: frontend/src/App.jsx
+# Change line 42:
+<h1>Ollama Chat</h1>
+# to:
+<h1>My AI Assistant</h1>
+
+# Save file (Ctrl+S)
+```
+
+**What happens immediately:**
+
+```
+1. File saved to:
+   ~/codeplatoon/projects/ollama-chat-app/frontend/src/App.jsx
+
+2. Container sees change at:
+   /src/src/App.jsx (same file, via bind mount)
+
+3. Vite output in terminal:
+   [vite] hot updated: /src/src/App.jsx
+
+4. Browser refreshes automatically
+   (no manual refresh needed)
+
+5. New heading visible in UI
+```
+
+#### **Example 2: Edit Backend Code**
+
+```bash
+# Backend is running in container
+docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f backend
+
+# In VS Code, edit: backend/app.py
+# Change line 25:
+return {"status": "healthy"}
+# to:
+return {"status": "healthy", "version": "1.0.0"}
+
+# Save file (Ctrl+S)
+```
+
+**What happens immediately:**
+
+```
+1. File saved to:
+   ~/codeplatoon/projects/ollama-chat-app/backend/app.py
+
+2. Container sees change at:
+   /app/app.py (same file, via bind mount)
+
+3. Flask reloader output:
+   * Detected change in '/app/app.py', reloading
+   * Restarting with stat
+
+4. Flask restarts (1-2 seconds)
+
+5. New endpoint response:
+   curl http://localhost:8000/health
+   {"status": "healthy", "version": "1.0.0"}
+```
+
+#### **Example 3: Install New Dependencies**
+
+```bash
+# Install new npm package
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec frontend npm install axios
+
+# What happens:
+# 1. npm installs axios into /src/node_modules/ (inside container)
+# 2. package.json updated in /src/ (synced to host via mount)
+# 3. package-lock.json updated in /src/ (synced to host)
+# 4. node_modules/ stays inside container (anonymous volume)
+
+# Result on host:
+ls frontend/
+# package.json     ✅ Updated
+# package-lock.json ✅ Updated
+# node_modules/    ❌ Not updated (preserved in container)
+
+# Import in code works immediately:
+import axios from 'axios';  // ✅ Works (container has it)
+```
+
+---
+
+### **Debugging Volume Mounts**
+
+#### **Check Active Mounts**
+
+```bash
+# Inspect running container's mounts
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec frontend mount | grep /src
+
+# Output:
+# /dev/sda1 on /src type ext4 (rw,relatime)
+# tmpfs on /src/node_modules type tmpfs (rw)
+
+# Detailed volume info
+docker inspect ollama-frontend | jq '.[0].Mounts'
+```
+
+**Example output:**
+
+```json
+[
+  {
+    "Type": "bind",
+    "Source": "/home/lumineer/codeplatoon/projects/ollama-chat-app/frontend",
+    "Destination": "/src",
+    "Mode": "rw",
+    "RW": true,
+    "Propagation": "rprivate"
+  },
+  {
+    "Type": "volume",
+    "Name": "1234567890abcdef",
+    "Source": "/var/lib/docker/volumes/1234567890abcdef/_data",
+    "Destination": "/src/node_modules",
+    "Driver": "local",
+    "Mode": "z",
+    "RW": true,
+    "Propagation": ""
+  }
+]
+```
+
+#### **Test File Sync**
+
+```bash
+# Create test file on host
+echo "test" > frontend/test.txt
+
+# Check if visible in container
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec frontend cat /src/test.txt
+# Output: test
+
+# Create file in container
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec frontend sh -c "echo 'from container' > /src/container-test.txt"
+
+# Check if visible on host
+cat frontend/container-test.txt
+# Output: from container
+```
+
+#### **Common Volume Issues**
+
+```bash
+# Issue 1: Changes not syncing
+# Check if volume is actually mounted
+docker compose -f docker-compose.yml -f docker-compose.dev.yml config | grep -A 5 volumes
+
+# Issue 2: Permission denied
+# Container user doesn't match host user
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec frontend id
+# uid=1000(node) gid=1000(node)
+
+ls -la frontend/
+# drwxr-xr-x  5 lumineer lumineer  4096 Nov 25 10:00 frontend/
+
+# Fix: Run container as host user
+user: "${UID}:${GID}"  # Add to docker-compose.dev.yml
+
+# Issue 3: node_modules disappearing
+# Anonymous volume not configured correctly
+volumes:
+  - ./frontend:/src
+  - /src/node_modules  # Must be AFTER the bind mount
+```
+
+---
+
+### **Performance Considerations**
+
+#### **File System Performance**
+
+**On Linux (Native Docker):**
+
+- ✅ Native performance
+- ✅ inotify events work perfectly
+- ✅ No overhead
+
+**On macOS (Docker Desktop):**
+
+- ⚠️ Slower (osxfs or VirtioFS layer)
+- ⚠️ File watching can be slower
+- 💡 Solution: Use delegated/cached mounts
+
+```yaml
+# macOS optimization
+volumes:
+  - ./frontend:/src:delegated # Prioritize container writes
+  - ./backend:/app:cached # Prioritize host reads
+```
+
+**On Windows (Docker Desktop with WSL2):**
+
+- ✅ Good performance in WSL2
+- ⚠️ Slower if mounting from Windows filesystem
+- 💡 Solution: Keep project in WSL2 filesystem
+
+#### **Watch Mode Configuration**
+
+```javascript
+// vite.config.js - Force polling for problematic filesystems
+export default defineConfig({
+  server: {
+    watch: {
+      usePolling: true, // Force polling
+      interval: 100, // Poll every 100ms
+    },
+  },
+});
+```
+
+```python
+# Flask - Use polling instead of inotify
+# app.py
+app.run(debug=True, use_reloader=True, reloader_type='stat')
+```
+
+---
+
+### **Summary: Volume Mounts Explained**
+
+| Aspect          | How It Works                                                          |
+| --------------- | --------------------------------------------------------------------- |
+| **What**        | Bind mount creates direct connection between host and container paths |
+| **Speed**       | Near-instantaneous (same as local filesystem)                         |
+| **Direction**   | Bidirectional (changes sync both ways)                                |
+| **Persistence** | Files exist on host, survive container deletion                       |
+| **Use Case**    | Development: live reload, hot module replacement                      |
+| **Trade-off**   | Not suitable for production (security, coupling)                      |
+
+**Key Takeaways:**
+
+1. ✅ Mounted volumes are **not copies** - they're **live connections**
+2. ✅ Changes in host **instantly visible** in container (and vice versa)
+3. ✅ Enables **hot reload** without rebuilding images
+4. ✅ Anonymous volumes (`/src/node_modules`) **prevent conflicts**
+5. ❌ **Never use** in production (security risk)
+6. ✅ Production: bake code into image, no mounts
+
+This is why `docker-compose.dev.yml` enables rapid development while `docker-compose.prod.yml` focuses on immutable, reproducible deployments! 🚀
+
+---
 
 #### **Essential Git Commands**
 

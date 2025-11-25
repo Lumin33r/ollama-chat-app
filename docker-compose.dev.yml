@@ -8,7 +8,7 @@ services:
       dockerfile: Dockerfile
     volumes:
       # Mount source code for hot-reload
-      - ./backend:/app
+      - ./backend:/src
     environment:
       FLASK_ENV: development
       FLASK_DEBUG: "True"
@@ -21,8 +21,8 @@ services:
       dockerfile: Dockerfile.dev
     volumes:
       # Mount source code for hot-reload
-      - ./frontend:/app
-      - /app/node_modules
+      - ./frontend:/src
+      - /node_modules
     environment:
       VITE_API_URL: http://localhost:8000
     ports:
