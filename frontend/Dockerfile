@@ -23,7 +23,7 @@ RUN npm run build || (echo "Build failed, retrying..." && rm -rf node_modules &&
 FROM nginx:stable-alpine
 
 # Copy built files
-COPY --from=builder /app/dist /usr/share/nginx/html
+COPY --from=builder /src/dist /usr/share/nginx/html
 
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/nginx.conf
