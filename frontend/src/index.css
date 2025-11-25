@@ -5,7 +5,7 @@
 
   color-scheme: light;
   color: #213547;
-  background-color: #ffffff;
+  background-color: #803e3e;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -37,7 +37,7 @@ button {
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: #3a77d4;
 }
 
 ::-webkit-scrollbar-thumb {

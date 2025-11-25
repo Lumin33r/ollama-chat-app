@@ -5,14 +5,14 @@ services:
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     volumes:
       # Mount source code for hot-reload
       - ./backend:/src
     environment:
       FLASK_ENV: development
       FLASK_DEBUG: "True"
-    command: python app.py
+    command: python src/app.py
 
   # Development frontend with Vite dev server
   frontend:
