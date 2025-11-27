@@ -1,17 +1,18 @@
-# EC2 Instance Guide
+# EC2 Instance Guide - Auto Scaling Architecture
+
+> **Architecture Note**: This infrastructure uses **auto-scaling only** - no single-instance deployment mode. The application is **stateless** (no database, no persistent storage). Backend forwards requests to Ollama, frontend uses localStorage.
 
 ## Table of Contents
 
 - [What is EC2?](#what-is-ec2)
-- [EC2 in the Ollama Chat Infrastructure](#ec2-in-the-ollama-chat-infrastructure)
-- [EC2 Instance Configuration Breakdown](#ec2-instance-configuration-breakdown)
-- [Root Block Device (EBS Storage)](#root-block-device-ebs-storage)
-- [User Data (Bootstrap Scripts)](#user-data-bootstrap-scripts)
+- [EC2 in the Auto Scaling Architecture](#ec2-in-the-auto-scaling-architecture)
+- [Launch Template Configuration](#launch-template-configuration)
+- [User Data Bootstrap Scripts](#user-data-bootstrap-scripts)
 - [Instance Metadata Service (IMDSv2)](#instance-metadata-service-imdsv2)
-- [Lifecycle Management](#lifecycle-management)
-- [How EC2 Fits Into the Greater Infrastructure](#how-ec2-fits-into-the-greater-infrastructure)
-- [Single-Instance vs Auto Scaling Architecture](#single-instance-vs-auto-scaling-architecture)
-- [Design Decisions and Best Practices](#design-decisions-and-best-practices)
+- [Auto Scaling Groups](#auto-scaling-groups)
+- [Instance Access via Systems Manager](#instance-access-via-systems-manager)
+- [How EC2 Fits Into the Infrastructure](#how-ec2-fits-into-the-infrastructure)
+- [Design Decisions](#design-decisions)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -28,1456 +29,1021 @@
 | **Instance**                   | A running EC2 virtual machine                                | Each instance is an isolated environment for your application                  |
 | **AMI (Amazon Machine Image)** | A template that contains the OS and software configuration   | Like a blueprint for creating identical servers quickly                        |
 | **Instance Type**              | The hardware specification (CPU, memory, network)            | Different workloads need different amounts of resources                        |
-| **Instance Store vs EBS**      | Temporary vs persistent storage                              | EBS volumes persist data even when instances stop                              |
+| **Launch Template**            | A reusable instance configuration                            | Defines settings for Auto Scaling Groups to launch instances                   |
 
-### Why Use EC2?
+### Why Use EC2 with Auto Scaling?
 
-1. **Flexibility**: Choose exact hardware specs you need
-2. **Scalability**: Launch more instances when traffic increases
-3. **Cost-Effective**: Pay only for what you use
-4. **Control**: Full administrative access to configure as needed
-5. **Integration**: Works seamlessly with other AWS services
+1. **High Availability**: Multiple instances across availability zones
+2. **Scalability**: Automatically add instances when traffic increases
+3. **Cost-Effective**: Scale down during low traffic periods
+4. **Fault Tolerance**: Failed instances are automatically replaced
+5. **Load Distribution**: Traffic spread across healthy instances
 
 ---
 
-## EC2 in the Ollama Chat Infrastructure
+## EC2 in the Auto Scaling Architecture
 
-In the Ollama Chat application, EC2 instances serve as the **compute layer** that runs your application code. Here's how they fit into the overall architecture:
+In the Ollama Chat application, EC2 instances are managed by **Auto Scaling Groups** that automatically adjust capacity based on CPU load.
+
+### Architecture Overview
 
 ```
 Internet
    ↓
-Internet Gateway (IGW)
+Application Load Balancer (ALB) ← Public Subnets (2 AZs)
    ↓
-Application Load Balancer (ALB) ← Public Subnets
-   ↓                                  ↑
-Security Groups (Firewall)            |
-   ↓                                  |
-EC2 Instances ←→ NAT Gateway ─────────┘
-   ↓             (Private Subnets)
-   ↓
-IAM Role (Permissions)
-   ↓
-EBS Volumes (Storage)
-   ↓
-CloudWatch (Monitoring)
+   ├─→ Backend Target Group → Backend ASG → Backend EC2 Instances (Private Subnets)
+   │                                            ├─ us-east-1a (min: 1, max: 2)
+   │                                            └─ us-east-1b (min: 1, max: 2)
+   │
+   └─→ Frontend Target Group → Frontend ASG → Frontend EC2 Instances (Private Subnets)
+                                                ├─ us-east-1a (min: 1, max: 2)
+                                                └─ us-east-1b (min: 1, max: 2)
 ```
 
-### Infrastructure Layers and EC2's Role
+### Key Characteristics
 
-| Layer              | Component              | EC2's Interaction                                     |
-| ------------------ | ---------------------- | ----------------------------------------------------- |
-| **Network**        | VPC, Subnets           | EC2 instances are placed in subnets within the VPC    |
-| **Security**       | Security Groups, NACLs | Control what traffic can reach EC2 instances          |
-| **Identity**       | IAM Roles              | Give EC2 instances permissions to access AWS services |
-| **Storage**        | EBS Volumes            | Provide persistent disk storage for EC2 instances     |
-| **Load Balancing** | ALB                    | Distributes traffic across multiple EC2 instances     |
-| **Monitoring**     | CloudWatch             | Collects metrics and logs from EC2 instances          |
-| **Access**         | SSH Key Pairs          | Allow secure login to EC2 instances                   |
+| Characteristic       | Value                                              |
+| -------------------- | -------------------------------------------------- |
+| **Deployment Mode**  | Auto Scaling Groups only (no single-instance mode) |
+| **Subnet Type**      | Private subnets (no public IPs)                    |
+| **Multi-AZ**         | Instances distributed across 2 availability zones  |
+| **Scaling**          | CPU-based (scale up >70% CPU, scale down <30% CPU) |
+| **Access Method**    | AWS Systems Manager Session Manager (no SSH keys)  |
+| **Storage**          | None - stateless application                       |
+| **Backend Min/Max**  | 2 minimum, 4 maximum instances                     |
+| **Frontend Min/Max** | 2 minimum, 4 maximum instances                     |
 
 ---
 
-## EC2 Instance Configuration Breakdown
+## Launch Template Configuration
 
-Let's examine each part of the EC2 instance resource in detail:
+Launch Templates define the configuration for EC2 instances that Auto Scaling Groups will create.
+
+### Backend Launch Template
 
 ```hcl
-resource "aws_instance" "ollama_app" {
-  ami                    = var.ami_id
-  instance_type          = var.instance_type
-  key_name               = aws_key_pair.ollama_key.key_name
-  subnet_id              = aws_subnet.public_subnet_1.id
-  vpc_security_group_ids = [aws_security_group.ollama_sg.id]
-  iam_instance_profile   = aws_iam_instance_profile.ollama_profile.name
+resource "aws_launch_template" "backend_lt" {
+  name_prefix   = "${var.project_name}-backend-"
+  image_id      = var.ami_id
+  instance_type = var.backend_instance_type
 
-  root_block_device {
-    volume_type           = "gp3"
-    volume_size           = var.root_volume_size
-    delete_on_termination = true
-    encrypted             = true
+  vpc_security_group_ids = [aws_security_group.backend_sg.id]
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.ollama_profile.name
   }
 
-  user_data = templatefile("${path.module}/user-data.sh", {
+  user_data = base64encode(templatefile("${path.module}/backend-user-data.sh", {
     project_name = var.project_name
     git_repo_url = var.git_repo_url
     ollama_model = var.ollama_model
-    domain_name  = var.domain_name
-  })
+  }))
 
   metadata_options {
     http_endpoint               = "enabled"
     http_tokens                 = "required"
     http_put_response_hop_limit = 1
+    instance_metadata_tags      = "enabled"
   }
 
-  tags = {
-    Name        = "${var.project_name}-instance"
-    Environment = var.environment
-    Project     = var.project_name
+  tag_specifications {
+    resource_type = "instance"
+    tags = {
+      Name        = "${var.project_name}-backend"
+      Environment = var.environment
+      Type        = "Backend"
+    }
   }
 
   lifecycle {
-    ignore_changes = [ami]
+    create_before_destroy = true
   }
 }
 ```
 
-### Core Configuration Parameters
+### Configuration Parameters
 
 #### 1. AMI (Amazon Machine Image)
 
 ```hcl
-ami = var.ami_id
+image_id = var.ami_id
 ```
 
-| Attribute           | Description                                                                             |
-| ------------------- | --------------------------------------------------------------------------------------- |
-| **What It Is**      | A template that contains the operating system, software, and configuration              |
-| **Common Examples** | Amazon Linux 2023, Ubuntu 22.04, Amazon Linux 2                                         |
-| **How to Choose**   | Consider OS compatibility, software requirements, and AWS optimization                  |
-| **Why It Matters**  | Different AMIs have different packages, configurations, and performance characteristics |
+| Setting             | Description                                                    |
+| ------------------- | -------------------------------------------------------------- |
+| **What It Is**      | Template containing OS and base software                       |
+| **Default**         | Amazon Linux 2023 or Ubuntu 22.04                              |
+| **Why Variable**    | Easy to update AMI without changing Terraform code             |
+| **Update Strategy** | Update variable → Terraform creates new instances with new AMI |
 
-**Design Decision**: This configuration uses a variable so you can easily change AMIs without editing the Terraform code. Common choices for Ollama:
+**Recommended AMIs for Ollama:**
 
-- **Amazon Linux 2023**: AWS-optimized, good for Docker, free-tier eligible
-- **Ubuntu 22.04 LTS**: More software packages, better community support
-- **Deep Learning AMI**: Pre-installed ML frameworks (if using GPU instances)
+- **Amazon Linux 2023**: AWS-optimized, Docker included, automatic security updates
+- **Ubuntu 22.04 LTS**: Broader package ecosystem, more community support
 
 #### 2. Instance Type
 
 ```hcl
-instance_type = var.instance_type
+instance_type = var.backend_instance_type  # or var.frontend_instance_type
 ```
 
-| Instance Family | Use Case                   | Example Types           | Pricing (Approx) |
-| --------------- | -------------------------- | ----------------------- | ---------------- |
-| **t3/t3a**      | General purpose, burstable | t3.medium, t3.large     | $0.04-0.08/hour  |
-| **m5/m6i**      | Balanced compute/memory    | m5.large, m6i.xlarge    | $0.10-0.20/hour  |
-| **c5/c6i**      | Compute-optimized          | c5.xlarge, c6i.2xlarge  | $0.17-0.34/hour  |
-| **r5/r6i**      | Memory-optimized           | r5.large, r6i.xlarge    | $0.13-0.25/hour  |
-| **g4dn/p3**     | GPU instances (ML/AI)      | g4dn.xlarge, p3.2xlarge | $0.53-3.05/hour  |
+| Instance Family | Use Case           | Example Types       | Pricing (Approx) |
+| --------------- | ------------------ | ------------------- | ---------------- |
+| **t3/t3a**      | Burstable, general | t3.medium, t3.large | $0.04-0.08/hour  |
+| **m5/m6i**      | Balanced           | m5.large, m6i.large | $0.10-0.20/hour  |
+| **c5/c6i**      | Compute-optimized  | c5.large, c6i.large | $0.09-0.17/hour  |
 
-**For Ollama Chat Application**:
+**Recommendations:**
 
-- **Development**: `t3.medium` (2 vCPU, 4GB RAM) - minimal cost
-- **Production (CPU)**: `c5.2xlarge` (8 vCPU, 16GB RAM) - faster inference
-- **Production (GPU)**: `g4dn.xlarge` (4 vCPU, 16GB RAM, 1 GPU) - optimal for large models
+- **Backend**: `t3.medium` (2 vCPU, 4GB) for development, `c5.large` (2 vCPU, 4GB) for production
+- **Frontend**: `t3.small` (2 vCPU, 2GB) - serves static React build
 
-**Design Decision**: Using a variable allows you to:
-
-- Start small during development
-- Scale up for production
-- Test different instance types without code changes
-
-#### 3. SSH Key Pair
+#### 3. Security Groups
 
 ```hcl
-key_name = aws_key_pair.ollama_key.key_name
+vpc_security_group_ids = [aws_security_group.backend_sg.id]
 ```
 
-| Attribute         | Value                                          |
-| ----------------- | ---------------------------------------------- |
-| **What It Is**    | Public key cryptography for SSH authentication |
-| **Purpose**       | Secure login to EC2 instance without passwords |
-| **Reference**     | Points to `aws_key_pair.ollama_key` resource   |
-| **Security Note** | Private key NEVER leaves your local machine    |
+| Setting                     | Description                                        |
+| --------------------------- | -------------------------------------------------- |
+| **Backend Security Group**  | Allows port 8000 from ALB only                     |
+| **Frontend Security Group** | Allows port 3000 from ALB only                     |
+| **Outbound**                | All traffic allowed (for NAT Gateway connectivity) |
 
-**How It Works**:
+**Security Principles:**
 
-1. You generate a public/private key pair locally
-2. Terraform uploads the public key to AWS
-3. AWS injects the public key into the EC2 instance at launch
-4. You use your private key to SSH into the instance
+- ✅ Instances only accept traffic from ALB (not directly from internet)
+- ✅ No SSH port 22 needed (using Systems Manager)
+- ✅ Outbound traffic allowed for software updates and API calls
 
-**See Also**: [IAM Guide](./iam-GUIDE.md#ssh-key-pairs) for detailed key pair setup instructions.
-
-#### 4. Subnet Placement
+#### 4. IAM Instance Profile
 
 ```hcl
-subnet_id = aws_subnet.public_subnet_1.id
-```
-
-| Attribute             | Value                                                                        |
-| --------------------- | ---------------------------------------------------------------------------- |
-| **What It Is**        | The network segment where the instance will be placed                        |
-| **Subnet Type**       | Public subnet (has route to Internet Gateway)                                |
-| **Availability Zone** | Placed in the first available AZ in the region                               |
-| **IP Assignment**     | Automatically receives a public IP (due to `map_public_ip_on_launch = true`) |
-
-**Design Decision**: This single-instance deployment uses a public subnet because:
-
-- Direct internet access for HTTP/HTTPS traffic
-- Simplifies initial setup (no NAT Gateway required for single instance)
-- Lower cost for development/testing environments
-
-**Production Consideration**: For the Auto Scaling architecture, backend instances are placed in **private subnets** for better security. See [Networking Guide](./ollama-chat-prod-networking.md) for details.
-
-#### 5. Security Groups
-
-```hcl
-vpc_security_group_ids = [aws_security_group.ollama_sg.id]
-```
-
-| Attribute        | Value                                                       |
-| ---------------- | ----------------------------------------------------------- |
-| **What It Is**   | Virtual firewall that controls inbound and outbound traffic |
-| **Effect**       | Only traffic matching security group rules is allowed       |
-| **Type**         | Array (can attach multiple security groups)                 |
-| **Statefulness** | Return traffic is automatically allowed                     |
-
-**The `ollama_sg` security group allows**:
-
-- SSH (port 22) from specified CIDR blocks
-- HTTP (port 80) from anywhere
-- HTTPS (port 443) from anywhere
-- Frontend (port 3000) from anywhere
-- Backend API (port 8000) from anywhere
-- All outbound traffic
-
-**See Also**: [Security Group Guide](./securitygroup-GUIDE.md) for detailed firewall configuration.
-
-#### 6. IAM Instance Profile
-
-```hcl
-iam_instance_profile = aws_iam_instance_profile.ollama_profile.name
-```
-
-| Attribute                 | Value                                                 |
-| ------------------------- | ----------------------------------------------------- |
-| **What It Is**            | A bridge between EC2 and IAM roles                    |
-| **Purpose**               | Gives the instance permissions to access AWS services |
-| **Attached Policies**     | SSM (Systems Manager), CloudWatch Agent               |
-| **No Credentials Needed** | Temporary credentials are automatically rotated       |
-
-**What the Instance Can Do** (via `ollama_ec2_role`):
-
-- ✅ Send logs and metrics to CloudWatch
-- ✅ Allow remote management via AWS Systems Manager (Session Manager)
-- ✅ Register as a managed instance for patching
-- ❌ Cannot create/delete AWS resources (security best practice)
-
-**See Also**: [IAM Guide](./iam-GUIDE.md#ec2-iam-role) for complete permission breakdown.
-
----
-
-## Root Block Device (EBS Storage)
-
-```hcl
-root_block_device {
-  volume_type           = "gp3"
-  volume_size           = var.root_volume_size
-  delete_on_termination = true
-  encrypted             = true
+iam_instance_profile {
+  name = aws_iam_instance_profile.ollama_profile.name
 }
 ```
 
-### What is EBS?
+| Setting             | Description                                              |
+| ------------------- | -------------------------------------------------------- |
+| **Attached Policy** | `AmazonSSMManagedInstanceCore`                           |
+| **Purpose**         | Allows Systems Manager Session Manager access            |
+| **No SSH Keys**     | IAM-based authentication replaces SSH key pairs          |
+| **Secure**          | No credentials stored on instance, automatically rotated |
 
-**Elastic Block Store (EBS)** is AWS's persistent block storage service. Think of it as a virtual hard drive that can be attached to EC2 instances.
+**What Instances Can Do:**
 
-### Root Block Device Configuration
+- ✅ Register with Systems Manager for remote access
+- ✅ Send session logs to CloudTrail (audit trail)
+- ❌ Cannot create/modify AWS resources (security best practice)
 
-| Parameter                 | Value    | Explanation                                  |
-| ------------------------- | -------- | -------------------------------------------- |
-| **volume_type**           | `gp3`    | General Purpose SSD (latest generation)      |
-| **volume_size**           | Variable | Size in GB (typically 30-100GB for this app) |
-| **delete_on_termination** | `true`   | Volume is deleted when instance terminates   |
-| **encrypted**             | `true`   | Data is encrypted at rest using AWS KMS      |
-
-### EBS Volume Types Comparison
-
-| Type    | IOPS         | Throughput     | Use Case                        | Cost            |
-| ------- | ------------ | -------------- | ------------------------------- | --------------- |
-| **gp3** | 3,000-16,000 | 125-1,000 MB/s | Most workloads (recommended)    | $0.08/GB-month  |
-| **gp2** | 100-16,000   | 128-250 MB/s   | Legacy general purpose          | $0.10/GB-month  |
-| **io2** | 100-64,000   | 1,000 MB/s     | High-performance databases      | $0.125/GB-month |
-| **st1** | 500          | 500 MB/s       | Big data, data warehouses       | $0.045/GB-month |
-| **sc1** | 250          | 250 MB/s       | Cold storage, infrequent access | $0.015/GB-month |
-
-**Design Decision: Why gp3?**
-
-1. **Better Value**: 20% cheaper than gp2 with better performance
-2. **Predictable Performance**: 3,000 IOPS baseline (doesn't depend on volume size)
-3. **Flexible**: Can independently adjust IOPS and throughput if needed
-4. **Sufficient for Ollama**: AI model loading and inference don't require extreme disk I/O
-
-### Storage Layout for Ollama App
-
-```
-/dev/xvda (Root Block Device - gp3)
-├── / (Root filesystem)
-│   ├── /boot - Boot files
-│   ├── /etc - Configuration files
-│   ├── /home - User directories
-│   ├── /var - Variable data (logs, Docker)
-│   │   └── /var/lib/docker - Docker images and containers
-│   └── /tmp - Temporary files
-│
-/dev/sdf (Separate EBS Volume - gp3)
-└── /mnt/ollama-models - Ollama model storage
-    ├── llama2:7b
-    ├── mistral:latest
-    └── codellama:13b
-```
-
-**Why Separate Volumes?**
-
-| Aspect                | Root Volume                       | Separate Model Volume                  |
-| --------------------- | --------------------------------- | -------------------------------------- |
-| **Purpose**           | OS, application code, Docker      | AI models only                         |
-| **Size**              | 30-50GB                           | 50-500GB (models are large!)           |
-| **Backup Strategy**   | Snapshot before updates           | Snapshot after downloading models      |
-| **Replacement**       | Can replace without losing models | Can detach and attach to new instances |
-| **Cost Optimization** | Right-sized for OS/apps           | Can use larger volume only when needed |
-
-### Encryption
+#### 5. User Data Script
 
 ```hcl
-encrypted = true
+user_data = base64encode(templatefile("${path.module}/backend-user-data.sh", {...}))
 ```
 
-| Attribute              | Value                                                   |
-| ---------------------- | ------------------------------------------------------- |
-| **What It Is**         | Data is encrypted at rest using AES-256 encryption      |
-| **Key Management**     | AWS-managed key (default) or customer-managed key (CMK) |
-| **Performance Impact** | Negligible (encryption/decryption happens in hardware)  |
-| **Compliance**         | Required for many security standards (HIPAA, PCI-DSS)   |
+| Setting       | Description                                     |
+| ------------- | ----------------------------------------------- |
+| **Format**    | Base64-encoded bash script                      |
+| **Execution** | Runs once at first boot                         |
+| **Purpose**   | Install software, clone repo, start application |
+| **Template**  | Uses `templatefile()` to inject variables       |
 
-**Design Decision**: Always enable encryption because:
+**Variables Passed to Script:**
 
-- No performance penalty
-- No cost increase
-- Prevents data exposure if physical storage is compromised
-- Required for compliance with security best practices
+- `project_name`: Used for naming, tagging
+- `git_repo_url`: Repository to clone
+- `ollama_model`: AI model to download
 
-### Delete on Termination
+See [User Data Bootstrap Scripts](#user-data-bootstrap-scripts) section for details.
 
-```hcl
-delete_on_termination = true
-```
-
-| Setting | Behavior                                   | Use Case                                         |
-| ------- | ------------------------------------------ | ------------------------------------------------ |
-| `true`  | Volume is deleted when instance terminates | Development, auto-scaling groups, stateless apps |
-| `false` | Volume persists after instance termination | Data persistence, manual recovery, cost savings  |
-
-**Design Decision**: Set to `true` for the root volume because:
-
-- OS and app code can be recreated from AMI and user data
-- Prevents orphaned volumes that accumulate costs
-- Consistent with immutable infrastructure practices
-
-**Important**: The separate Ollama models volume (`aws_ebs_volume.ollama_models`) does NOT have this flag set, so it persists and can be reattached to new instances.
-
----
-
-## User Data (Bootstrap Scripts)
-
-```hcl
-user_data = templatefile("${path.module}/user-data.sh", {
-  project_name = var.project_name
-  git_repo_url = var.git_repo_url
-  ollama_model = var.ollama_model
-  domain_name  = var.domain_name
-})
-```
-
-### What is User Data?
-
-**User Data** is a script that runs **automatically** when an EC2 instance first launches. It's how you automate the initial setup and configuration of your server.
-
-### How User Data Works
-
-```
-EC2 Instance Launch
-       ↓
-Boot Operating System
-       ↓
-cloud-init Service Starts
-       ↓
-Execute User Data Script (as root)
-       ↓
-Install Software
-       ↓
-Configure Applications
-       ↓
-Start Services
-       ↓
-Instance Ready
-```
-
-### Templatefile Function
-
-The `templatefile()` function allows you to:
-
-1. **Parameterize scripts**: Pass Terraform variables into bash scripts
-2. **DRY Principle**: One script template, multiple configurations
-3. **Dynamic Configuration**: Change behavior without rewriting scripts
-
-**Example Template Syntax**:
-
-```bash
-#!/bin/bash
-# user-data.sh
-
-# Variables from Terraform
-PROJECT_NAME="${project_name}"
-REPO_URL="${git_repo_url}"
-MODEL="${ollama_model}"
-DOMAIN="${domain_name}"
-
-echo "Setting up ${PROJECT_NAME}..."
-git clone ${REPO_URL}
-ollama pull ${MODEL}
-```
-
-**Terraform populates** the `${...}` placeholders with actual values:
-
-```hcl
-user_data = templatefile("${path.module}/user-data.sh", {
-  project_name = "ollama-chat"           # → ${project_name}
-  git_repo_url = "https://github.com/..."  # → ${git_repo_url}
-  ollama_model = "llama2:7b"             # → ${ollama_model}
-  domain_name  = "chat.example.com"      # → ${domain_name}
-})
-```
-
-### User Data Script Responsibilities
-
-For the Ollama Chat application, the user data script typically:
-
-1. **System Updates**
-
-   ```bash
-   yum update -y  # or apt-get update for Ubuntu
-   ```
-
-2. **Install Dependencies**
-
-   ```bash
-   yum install -y docker git python3 pip
-   ```
-
-3. **Configure Services**
-
-   ```bash
-   systemctl enable docker
-   systemctl start docker
-   ```
-
-4. **Install Ollama**
-
-   ```bash
-   curl https://ollama.ai/install.sh | sh
-   ```
-
-5. **Download AI Models**
-
-   ```bash
-   ollama pull llama2:7b
-   ollama pull mistral:latest
-   ```
-
-6. **Clone Application Code**
-
-   ```bash
-   git clone ${git_repo_url} /opt/ollama-chat
-   ```
-
-7. **Setup Backend**
-
-   ```bash
-   cd /opt/ollama-chat/backend
-   pip install -r requirements.txt
-   python app.py &
-   ```
-
-8. **Setup Frontend**
-
-   ```bash
-   cd /opt/ollama-chat/frontend
-   npm install
-   npm run build
-   npm start &
-   ```
-
-9. **Configure Monitoring**
-   ```bash
-   # Install CloudWatch agent
-   wget https://s3.amazonaws.com/amazoncloudwatch-agent/...
-   ```
-
-### User Data Best Practices
-
-| Practice            | Why                        | Example                                |
-| ------------------- | -------------------------- | -------------------------------------- |
-| **Logging**         | Debug failures             | `exec > >(tee /var/log/user-data.log)` |
-| **Error Handling**  | Stop on errors             | `set -e` at script start               |
-| **Idempotency**     | Safe to run multiple times | Check if software already installed    |
-| **Validation**      | Verify success             | `curl localhost:8000/health`           |
-| **Cloud-Init Logs** | AWS maintains logs         | `/var/log/cloud-init-output.log`       |
-
-### User Data Limitations
-
-| Limitation                                    | Workaround                                                         |
-| --------------------------------------------- | ------------------------------------------------------------------ |
-| **Runs once** (at first boot)                 | Use configuration management (Ansible, Chef) for ongoing updates   |
-| **No direct output** to console               | Write to log files, view with `cat /var/log/cloud-init-output.log` |
-| **Instance replacement** required for changes | Use Auto Scaling with Launch Templates for updates                 |
-| **Script failures** are silent                | Implement health checks and CloudWatch alarms                      |
-
-### Viewing User Data Execution
-
-**On the instance**:
-
-```bash
-# View user data script
-sudo cat /var/lib/cloud/instance/user-data.txt
-
-# View execution output
-sudo cat /var/log/cloud-init-output.log
-
-# Check for errors
-sudo cat /var/log/cloud-init.log | grep -i error
-```
-
----
-
-## Instance Metadata Service (IMDSv2)
+#### 6. Metadata Options (IMDSv2)
 
 ```hcl
 metadata_options {
   http_endpoint               = "enabled"
   http_tokens                 = "required"
   http_put_response_hop_limit = 1
+  instance_metadata_tags      = "enabled"
 }
 ```
 
-### What is Instance Metadata?
+| Setting                       | Value      | Why This Value?                                   |
+| ----------------------------- | ---------- | ------------------------------------------------- |
+| `http_endpoint`               | `enabled`  | Allows instance to access metadata                |
+| `http_tokens`                 | `required` | **Forces IMDSv2** (more secure)                   |
+| `http_put_response_hop_limit` | `1`        | Prevents metadata access from containers/pods     |
+| `instance_metadata_tags`      | `enabled`  | Tags accessible via metadata (useful for scripts) |
 
-**Instance Metadata Service (IMDS)** is a service that provides information about your instance that you can access from within the instance itself. It's like an internal API that the instance can query to learn about itself.
-
-### What Information is Available?
-
-Applications running on the instance can query metadata to get:
-
-```bash
-# Get instance ID
-curl http://169.254.169.254/latest/meta-data/instance-id
-
-# Get IAM role credentials
-curl http://169.254.169.254/latest/meta-data/iam/security-credentials/ollama_ec2_role
-
-# Get public IP
-curl http://169.254.169.254/latest/meta-data/public-ipv4
-
-# Get availability zone
-curl http://169.254.169.254/latest/meta-data/placement/availability-zone
-```
-
-### IMDSv1 vs IMDSv2
-
-| Feature                | IMDSv1 (Legacy)        | IMDSv2 (Secure)               |
-| ---------------------- | ---------------------- | ----------------------------- |
-| **Authentication**     | None (simple HTTP GET) | Session-based tokens required |
-| **SSRF Protection**    | Vulnerable             | Protected                     |
-| **Token Retrieval**    | Not required           | Required PUT request          |
-| **Token Lifetime**     | N/A                    | 1-6 hours (configurable)      |
-| **AWS Recommendation** | Deprecated             | Required for new instances    |
-
-### Configuration Breakdown
-
-#### 1. http_endpoint = "enabled"
-
-```hcl
-http_endpoint = "enabled"
-```
-
-| Value      | Effect                                    |
-| ---------- | ----------------------------------------- |
-| `enabled`  | Applications can access metadata service  |
-| `disabled` | Metadata service is completely turned off |
-
-**Design Decision**: Keep enabled because:
-
-- AWS SDKs use it to retrieve IAM role credentials automatically
-- CloudWatch agent needs it for instance information
-- Many AWS services rely on it for integration
-
-#### 2. http_tokens = "required" (IMDSv2)
-
-```hcl
-http_tokens = "required"
-```
-
-| Value      | Effect                           | Security Level          |
-| ---------- | -------------------------------- | ----------------------- |
-| `required` | **IMDSv2 only** - token required | High (recommended)      |
-| `optional` | IMDSv1 and IMDSv2 both work      | Medium (legacy support) |
-
-**How IMDSv2 Works**:
-
-```bash
-# Step 1: Request a session token (PUT request)
-TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" \
-  -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-
-# Step 2: Use token to access metadata (GET request with header)
-curl -H "X-aws-ec2-metadata-token: $TOKEN" \
-  http://169.254.169.254/latest/meta-data/instance-id
-```
-
-**Why IMDSv2 is More Secure**:
-
-1. **SSRF Protection**: Server-Side Request Forgery attacks can't steal credentials
-2. **Token-Based**: Attackers need to send a PUT request first (harder to exploit)
-3. **Hop Limit**: Prevents network traversal beyond the instance
-
-#### 3. http_put_response_hop_limit = 1
-
-```hcl
-http_put_response_hop_limit = 1
-```
-
-| Value | Effect                                        | Use Case                        |
-| ----- | --------------------------------------------- | ------------------------------- |
-| `1`   | Metadata accessible only from instance itself | Standard (recommended)          |
-| `2`   | Accessible from instance + 1 network hop      | Containers with host networking |
-| `3+`  | Accessible from multiple network hops         | Rarely needed                   |
-
-**Design Decision**: Set to `1` because:
-
-- Prevents malicious containers from accessing metadata
-- Limits attack surface if instance is compromised
-- Sufficient for most application architectures
-
-**Exception**: If running Docker containers with `--network host`, you might need to increase to `2`.
-
-### Security Implications
-
-| Security Feature      | IMDSv1 Risk                                    | IMDSv2 Protection                            |
-| --------------------- | ---------------------------------------------- | -------------------------------------------- |
-| **SSRF Attacks**      | Attacker can trick app into querying metadata  | PUT request requirement prevents simple SSRF |
-| **Credential Theft**  | Easy to steal IAM role credentials             | Token-based auth adds barrier                |
-| **Container Escapes** | Compromised container can access host metadata | Hop limit restricts network traversal        |
-| **Open Proxies**      | Can proxy requests to metadata service         | Token requirement breaks proxy attacks       |
-
-### Real-World Example: Preventing SSRF
-
-**Vulnerable Code (IMDSv1)**:
-
-```python
-import requests
-
-# User-controlled URL (attacker provides this)
-url = request.args.get('url')  # User sends: http://169.254.169.254/latest/meta-data/iam/security-credentials/
-
-# App makes request (SSRF vulnerability!)
-response = requests.get(url)
-return response.text  # Attacker now has IAM credentials!
-```
-
-**With IMDSv2**:
-
-- The simple GET request fails (no token provided)
-- Attacker would need to send a PUT request first
-- Web application frameworks typically don't allow PUT in SSRF scenarios
-- Attack is prevented
+**Security Note**: IMDSv2 requires session tokens, preventing SSRF attacks. See [IMDSv2 section](#instance-metadata-service-imdsv2) for details.
 
 ---
 
-## Lifecycle Management
+## User Data Bootstrap Scripts
 
-```hcl
-lifecycle {
-  ignore_changes = [ami]
-}
-```
+User data scripts run at instance launch to configure and start the application.
 
-### What are Lifecycle Rules?
-
-**Lifecycle rules** tell Terraform how to handle changes to resources. They control Terraform's behavior during `plan`, `apply`, and `destroy` operations.
-
-### Common Lifecycle Rules
-
-| Rule                    | Effect                                  | Use Case                                  |
-| ----------------------- | --------------------------------------- | ----------------------------------------- |
-| `ignore_changes`        | Ignore changes to specific attributes   | Prevent unnecessary resource replacement  |
-| `create_before_destroy` | Create new resource before deleting old | Zero-downtime updates                     |
-| `prevent_destroy`       | Terraform cannot destroy resource       | Protect critical resources from accidents |
-
-### Why Ignore AMI Changes?
-
-```hcl
-lifecycle {
-  ignore_changes = [ami]
-}
-```
-
-**Problem Without This Rule**:
-
-1. You launch an instance with `ami-0abcdef` (Amazon Linux 2023)
-2. AWS releases a new AMI: `ami-0xyz123` (with security patches)
-3. You update your Terraform variable to the new AMI
-4. Terraform sees AMI changed and wants to **replace the entire instance**
-5. **Your instance is destroyed and recreated** (downtime!)
-
-**Solution With This Rule**:
-
-1. Terraform ignores the AMI change
-2. Instance continues running with the old AMI
-3. No unexpected downtime
-
-**When to Update AMIs**:
-
-| Method                                | Downtime | Use Case                                          |
-| ------------------------------------- | -------- | ------------------------------------------------- |
-| **Manual Replacement**                | Yes      | Planned maintenance window                        |
-| **Blue-Green Deployment**             | No       | Production systems with ALB                       |
-| **Auto Scaling with Launch Template** | No       | Update Launch Template, let ASG replace gradually |
-| **AMI Automation Pipeline**           | No       | Golden AMI pipeline with automated testing        |
-
-### Best Practice for AMI Updates
-
-**Development/Testing**:
-
-```hcl
-# Allow Terraform to manage AMI updates
-lifecycle {
-  # No ignore_changes - let Terraform recreate instance
-}
-```
-
-**Production**:
-
-```hcl
-# Use Auto Scaling + Launch Template approach
-resource "aws_launch_template" "app" {
-  image_id = var.ami_id  # Update this
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_autoscaling_group" "app" {
-  launch_template {
-    id      = aws_launch_template.app.id
-    version = "$Latest"  # Automatically use newest
-  }
-
-  # ASG will gradually replace instances
-  instance_refresh {
-    strategy = "Rolling"
-    preferences {
-      min_healthy_percentage = 90
-    }
-  }
-}
-```
-
-### Other Lifecycle Scenarios
-
-**Prevent Accidental Deletion**:
-
-```hcl
-resource "aws_instance" "production_app" {
-  # ... configuration ...
-
-  lifecycle {
-    prevent_destroy = true  # terraform destroy will fail
-  }
-}
-```
-
-**Zero-Downtime Replacement**:
-
-```hcl
-resource "aws_instance" "app" {
-  # ... configuration ...
-
-  lifecycle {
-    create_before_destroy = true  # New instance before old is destroyed
-  }
-}
-```
-
----
-
-## How EC2 Fits Into the Greater Infrastructure
-
-### 1. Network Layer Integration
-
-```
-VPC (10.0.0.0/16)
-├── Public Subnets (10.0.1.0/24, 10.0.2.0/24)
-│   ├── Internet Gateway ← Public internet access
-│   ├── Application Load Balancer ← Distributes traffic
-│   └── EC2 Instance (Single-instance mode) ← You are here
-│
-└── Private Subnets (10.0.11.0/24, 10.0.12.0/24)
-    ├── NAT Gateway ← Outbound internet for private instances
-    ├── Auto Scaling Group (Backend) ← Flask API servers
-    └── Auto Scaling Group (Frontend) ← React app servers
-```
-
-**EC2's Network Dependencies**:
-
-| Component            | Relationship          | Why EC2 Needs It                                |
-| -------------------- | --------------------- | ----------------------------------------------- |
-| **VPC**              | Parent network        | Provides isolated network environment           |
-| **Subnet**           | Network segment       | Determines availability zone and IP range       |
-| **Internet Gateway** | Public access         | Allows inbound HTTP/HTTPS and outbound internet |
-| **Route Table**      | Traffic routing       | Directs traffic between subnets and internet    |
-| **Security Group**   | Firewall              | Controls what traffic reaches the instance      |
-| **Network ACL**      | Subnet-level firewall | Additional security layer                       |
-
-### 2. Security Layer Integration
-
-```
-User Request (HTTP/HTTPS)
-       ↓
-Internet Gateway (allows traffic in)
-       ↓
-Network ACL (subnet-level filtering)
-       ↓
-Security Group (instance-level firewall)
-       ↓
-EC2 Instance
-       ↓
-IAM Instance Profile
-       ↓
-AWS Services (CloudWatch, SSM, S3)
-```
-
-**EC2's Security Dependencies**:
-
-| Component                | Purpose                | What It Protects Against        |
-| ------------------------ | ---------------------- | ------------------------------- |
-| **Security Group**       | Inbound/outbound rules | Unauthorized network access     |
-| **IAM Instance Profile** | AWS API permissions    | Unauthorized AWS service access |
-| **SSH Key Pair**         | Instance login         | Unauthorized SSH access         |
-| **IMDSv2**               | Metadata security      | SSRF attacks, credential theft  |
-| **EBS Encryption**       | Data at rest           | Physical storage compromise     |
-
-### 3. Identity and Access Integration
-
-```
-EC2 Instance
-       ↓
-IAM Instance Profile (ollama_profile)
-       ↓
-IAM Role (ollama_ec2_role)
-       ↓
-Attached Policies
-       ├── AmazonSSMManagedInstanceCore
-       │   └── Allows: Session Manager, Run Command, Patch Manager
-       └── CloudWatchAgentServerPolicy
-           └── Allows: Put metrics, Create log streams, Put log events
-```
-
-**What EC2 Can Do** (via IAM):
-
-- ✅ Send application logs to CloudWatch Logs
-- ✅ Send custom metrics to CloudWatch
-- ✅ Receive commands via AWS Systems Manager
-- ✅ Download patches via Systems Manager
-- ✅ Retrieve secrets from Parameter Store (if policy added)
-
-**What EC2 Cannot Do**:
-
-- ❌ Create or delete EC2 instances
-- ❌ Modify security groups
-- ❌ Access S3 buckets (unless policy added)
-- ❌ Assume other IAM roles
-
-### 4. Storage Layer Integration
-
-```
-EC2 Instance
-       ├── Root Block Device (gp3, 30GB)
-       │   └── OS, Docker, application code
-       │
-       └── Attached EBS Volume (gp3, 100GB)
-           └── /mnt/ollama-models
-               ├── llama2:7b (4GB)
-               ├── mistral:latest (4GB)
-               └── codellama:13b (7GB)
-```
-
-**Storage Architecture**:
-
-| Volume             | Purpose                         | Lifecycle                           | Backup Strategy                           |
-| ------------------ | ------------------------------- | ----------------------------------- | ----------------------------------------- |
-| **Root Volume**    | OS and apps                     | Deleted with instance               | AMI snapshots before updates              |
-| **Models Volume**  | AI models                       | Persists after instance termination | Manual snapshots after downloading models |
-| **EFS (Optional)** | Shared storage across instances | Independent                         | Daily automated snapshots                 |
-
-### 5. Monitoring and Logging Integration
-
-```
-EC2 Instance
-       ↓
-CloudWatch Agent (installed via user data)
-       ↓
-CloudWatch Services
-       ├── Metrics
-       │   ├── CPUUtilization
-       │   ├── NetworkIn/Out
-       │   ├── DiskReadOps/WriteOps
-       │   └── Custom Metrics (API latency, model inference time)
-       │
-       └── Logs
-           ├── /var/log/messages (system logs)
-           ├── /var/log/docker (container logs)
-           ├── /var/log/ollama (Ollama logs)
-           └── /var/log/user-data.log (bootstrap logs)
-```
-
-**CloudWatch Integration**:
-
-| Metric               | Source           | Use Case                     |
-| -------------------- | ---------------- | ---------------------------- |
-| **CPU Utilization**  | EC2 default      | Trigger auto-scaling         |
-| **Memory Usage**     | CloudWatch Agent | Detect memory leaks          |
-| **Disk I/O**         | EC2 default      | Identify storage bottlenecks |
-| **Network Traffic**  | EC2 default      | Monitor bandwidth usage      |
-| **Application Logs** | CloudWatch Agent | Debug application errors     |
-
-### 6. Load Balancing Integration (Auto Scaling Architecture)
-
-```
-Internet
-       ↓
-Application Load Balancer
-       ↓
-Target Groups
-       ├── Backend Target Group (port 8000)
-       │   └── Auto Scaling Group (Backend)
-       │       ├── EC2 Instance 1 (Flask API)
-       │       ├── EC2 Instance 2 (Flask API)
-       │       └── EC2 Instance N (Flask API)
-       │
-       └── Frontend Target Group (port 3000)
-           └── Auto Scaling Group (Frontend)
-               ├── EC2 Instance 1 (React)
-               ├── EC2 Instance 2 (React)
-               └── EC2 Instance N (React)
-```
-
-**Load Balancer Integration**:
-
-| Component              | Purpose                | EC2 Role                               |
-| ---------------------- | ---------------------- | -------------------------------------- |
-| **ALB**                | Distribute traffic     | Multiple EC2 instances handle requests |
-| **Target Group**       | Health checks          | EC2 must respond to `/health` endpoint |
-| **Auto Scaling Group** | Maintain capacity      | Launches new EC2 instances as needed   |
-| **Launch Template**    | Instance configuration | Defines EC2 settings for new instances |
-
-### 7. Complete Traffic Flow
-
-**Single-Instance Architecture** (Development):
-
-```
-User → Internet → IGW → Route Table → Security Group → EC2 Instance
-                                                         ├── Frontend (port 3000)
-                                                         └── Backend (port 8000)
-```
-
-**Multi-Instance Architecture** (Production):
-
-```
-User → Internet → IGW → ALB → Security Group → Target Group
-                                                       ↓
-                               Private Subnet → EC2 Instance 1
-                                              → EC2 Instance 2
-                                              → EC2 Instance N
-                                                       ↓
-                               NAT Gateway → IGW → Internet (outbound only)
-```
-
----
-
-## Single-Instance vs Auto Scaling Architecture
-
-The Terraform configuration supports **two deployment modes**:
-
-### Mode 1: Single-Instance Deployment
-
-```hcl
-# Single EC2 instance in public subnet
-resource "aws_instance" "ollama_app" {
-  subnet_id = aws_subnet.public_subnet_1.id
-  # ... handles all traffic directly
-}
-```
-
-| Aspect             | Configuration                                      |
-| ------------------ | -------------------------------------------------- |
-| **Deployment**     | One EC2 instance running both frontend and backend |
-| **Network**        | Public subnet with direct internet access          |
-| **Load Balancing** | None (direct access to instance)                   |
-| **Scalability**    | Manual (stop, change instance type, start)         |
-| **Cost**           | Lower (1 instance, no ALB)                         |
-| **Use Case**       | Development, testing, small-scale production       |
-
-**Pros**:
-
-- Simple setup
-- Lower cost
-- Easy to troubleshoot
-- Good for learning
-
-**Cons**:
-
-- No redundancy (single point of failure)
-- Cannot scale horizontally
-- Manual updates require downtime
-- Limited to one availability zone
-
-### Mode 2: Auto Scaling Architecture
-
-```hcl
-# Controlled by variable
-variable "enable_auto_scaling" {
-  default = false
-}
-
-# Launch Templates + Auto Scaling Groups
-resource "aws_launch_template" "backend_lt" {
-  count = var.enable_auto_scaling ? 1 : 0
-  # ... backend configuration
-}
-
-resource "aws_autoscaling_group" "backend_asg" {
-  count = var.enable_auto_scaling ? 1 : 0
-  # ... manages multiple backend instances
-}
-```
-
-| Aspect             | Configuration                                               |
-| ------------------ | ----------------------------------------------------------- |
-| **Deployment**     | Separate Auto Scaling Groups for backend and frontend       |
-| **Network**        | Private subnets (better security)                           |
-| **Load Balancing** | ALB distributes traffic                                     |
-| **Scalability**    | Automatic based on CPU metrics                              |
-| **Cost**           | Higher (multiple instances, ALB, NAT Gateways)              |
-| **Use Case**       | Production environments with high availability requirements |
-
-**Pros**:
-
-- High availability (multi-AZ)
-- Automatic scaling
-- Zero-downtime deployments
-- Better security (private subnets)
-
-**Cons**:
-
-- More complex to configure
-- Higher cost
-- More moving parts to troubleshoot
-
-### When to Use Each Architecture
-
-| Scenario                          | Recommended Architecture        | Why                                 |
-| --------------------------------- | ------------------------------- | ----------------------------------- |
-| **Learning Terraform**            | Single-Instance                 | Simpler, fewer concepts             |
-| **Development Environment**       | Single-Instance                 | Lower cost, easier debugging        |
-| **Testing/Staging**               | Single-Instance or Auto Scaling | Depends on production parity needs  |
-| **Production (Low Traffic)**      | Single-Instance + EIP           | Cost-effective, acceptable downtime |
-| **Production (High Traffic)**     | Auto Scaling                    | Required for reliability and scale  |
-| **Production (Mission-Critical)** | Auto Scaling + Multi-Region     | Maximum availability                |
-
-### Migration Path
-
-**Start Simple, Scale When Needed**:
-
-1. **Phase 1: Development**
-
-   ```hcl
-   enable_auto_scaling = false
-   instance_type = "t3.medium"
-   ```
-
-   - Single instance
-   - Public subnet
-   - Manual scaling
-
-2. **Phase 2: Initial Production**
-
-   ```hcl
-   enable_auto_scaling = false
-   instance_type = "c5.2xlarge"  # More powerful
-   ```
-
-   - Still single instance
-   - Better performance
-   - Add CloudWatch alarms
-
-3. **Phase 3: Scaling Production**
-   ```hcl
-   enable_auto_scaling = true
-   backend_min_size = 2
-   backend_max_size = 10
-   ```
-   - Auto Scaling enabled
-   - Multi-AZ deployment
-   - Zero-downtime updates
-
----
-
-## Design Decisions and Best Practices
-
-### 1. AMI Selection
-
-| Decision                 | Rationale                               |
-| ------------------------ | --------------------------------------- |
-| **Use variables**        | Easy to update without changing code    |
-| **Region-specific AMIs** | AMI IDs differ by region                |
-| **Lifecycle ignore**     | Prevent accidental instance replacement |
-
-**Recommendation**:
-
-```hcl
-# Use AWS Systems Manager Parameter Store for latest AMI
-data "aws_ssm_parameter" "amazon_linux_2023" {
-  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
-}
-
-resource "aws_instance" "ollama_app" {
-  ami = data.aws_ssm_parameter.amazon_linux_2023.value
-  # ...
-}
-```
-
-### 2. Instance Type Selection
-
-| Workload               | Instance Family   | Example Type | Monthly Cost (On-Demand) |
-| ---------------------- | ----------------- | ------------ | ------------------------ |
-| **Development**        | t3 (Burstable)    | t3.medium    | ~$30                     |
-| **Production (CPU)**   | c5 (Compute)      | c5.2xlarge   | ~$245                    |
-| **Production (GPU)**   | g4dn (GPU)        | g4dn.xlarge  | ~$380                    |
-| **Large Models (GPU)** | p3 (High-end GPU) | p3.2xlarge   | ~$2,205                  |
-
-**Cost Optimization**:
-
-- Use **Savings Plans** (30-70% discount for 1-3 year commitment)
-- Use **Spot Instances** for non-critical workloads (up to 90% discount)
-- Use **Reserved Instances** for predictable workloads (30-75% discount)
-
-### 3. Storage Configuration
-
-**Root Volume Best Practices**:
-
-- Use **gp3** (better value than gp2)
-- Size appropriately (30-50GB for OS + apps)
-- Always enable **encryption**
-- Set `delete_on_termination = true` for stateless apps
-
-**Separate Data Volumes**:
-
-- Use for large datasets (AI models, databases)
-- Set `delete_on_termination = false` for data persistence
-- Take regular snapshots
-- Consider EFS for shared storage across instances
-
-### 4. User Data Best Practices
+### Backend User Data Script
 
 ```bash
 #!/bin/bash
 set -e  # Exit on error
-set -x  # Print commands (for debugging)
 
-# Redirect output to log file
-exec > >(tee /var/log/user-data.log)
-exec 2>&1
+# Update system
+yum update -y  # or apt-get update && apt-get upgrade -y for Ubuntu
 
-echo "Starting user data script at $(date)"
+# Install dependencies
+yum install -y git python3 python3-pip docker
+
+# Start Docker
+systemctl start docker
+systemctl enable docker
+
+# Clone application repository
+cd /home/ec2-user
+git clone ${git_repo_url}
+cd ollama-chat-app/backend
+
+# Install Python dependencies
+pip3 install -r requirements.txt
+
+# Start Ollama container
+docker run -d \
+  --name ollama \
+  -p 11434:11434 \
+  -v /var/lib/ollama:/root/.ollama \
+  ollama/ollama
+
+# Wait for Ollama to start
+sleep 10
+
+# Pull AI model
+docker exec ollama ollama pull ${ollama_model}
+
+# Start Flask backend
+cd src
+python3 app.py &
+
+# Log completion
+echo "Backend initialization complete" >> /var/log/user-data.log
+```
+
+### Frontend User Data Script
+
+```bash
+#!/bin/bash
+set -e
 
 # Update system
 yum update -y
 
+# Install Node.js 18
+curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
+yum install -y nodejs
+
+# Clone repository
+cd /home/ec2-user
+git clone ${git_repo_url}
+cd ollama-chat-app/frontend
+
 # Install dependencies
-yum install -y docker git python3
+npm install
 
-# Start Docker
-systemctl enable docker
-systemctl start docker
+# Build React app
+npm run build
 
-# Wait for Docker to be ready
-until docker info &>/dev/null; do
-  echo "Waiting for Docker..."
-  sleep 1
-done
+# Install serve to host static files
+npm install -g serve
 
-# Install Ollama
-curl https://ollama.ai/install.sh | sh
+# Start frontend server on port 3000
+serve -s dist -l 3000 &
 
-# Pull AI models
-ollama pull ${ollama_model}
-
-# Clone application
-git clone ${git_repo_url} /opt/app
-
-# Setup application
-cd /opt/app
-pip3 install -r requirements.txt
-
-# Start application
-python3 app.py &
-
-echo "User data script completed at $(date)"
+echo "Frontend initialization complete" >> /var/log/user-data.log
 ```
 
-### 5. Security Best Practices
+### User Data Best Practices
 
-| Practice            | Implementation              | Why                          |
-| ------------------- | --------------------------- | ---------------------------- |
-| **IMDSv2**          | `http_tokens = "required"`  | Prevent SSRF attacks         |
-| **Encryption**      | `encrypted = true`          | Protect data at rest         |
-| **Minimal IAM**     | Only required permissions   | Principle of least privilege |
-| **Security Groups** | Restrict source IPs         | Limit attack surface         |
-| **SSH Keys**        | Never hardcode in Terraform | Prevent credential exposure  |
-| **Regular Updates** | Automated patching          | Fix security vulnerabilities |
+| Best Practice              | Why It Matters                                  |
+| -------------------------- | ----------------------------------------------- |
+| **Use `set -e`**           | Script stops on first error (fail fast)         |
+| **Log everything**         | Redirect output to `/var/log/user-data.log`     |
+| **Use `systemctl enable`** | Services restart on reboot                      |
+| **Wait for services**      | Add `sleep` or health checks before next step   |
+| **Test incrementally**     | Test script manually before adding to Terraform |
+| **Use templates**          | Inject variables instead of hardcoding          |
 
-### 6. High Availability Considerations
+**Debugging User Data:**
 
-**Single Instance Improvements**:
+```bash
+# Connect via Session Manager
+aws ssm start-session --target i-1234567890abcdef0
 
-- Use **Elastic IP** (static IP survives instance replacement)
-- Enable **detailed monitoring** (1-minute CloudWatch metrics)
-- Set up **CloudWatch alarms** (CPU, disk, status checks)
-- Implement **automated backups** (EBS snapshots, AMI creation)
+# Check user data script output
+sudo cat /var/log/cloud-init-output.log
+sudo cat /var/log/user-data.log
 
-**Multi-Instance Architecture**:
+# Check if services are running
+systemctl status docker
+ps aux | grep python
+ps aux | grep node
+```
 
-- Deploy across **multiple Availability Zones**
-- Use **Application Load Balancer** (health checks, traffic distribution)
-- Implement **Auto Scaling** (automatic capacity management)
-- Use **Launch Templates** (consistent instance configuration)
+---
+
+## Instance Metadata Service (IMDSv2)
+
+### What is IMDS?
+
+The **Instance Metadata Service** allows EC2 instances to retrieve information about themselves without using the AWS API.
+
+### Metadata Available
+
+| Metadata Path                                 | Information Provided        |
+| --------------------------------------------- | --------------------------- |
+| `/latest/meta-data/instance-id`               | Instance ID                 |
+| `/latest/meta-data/local-ipv4`                | Private IP address          |
+| `/latest/meta-data/public-ipv4`               | Public IP (if assigned)     |
+| `/latest/meta-data/ami-id`                    | AMI used to launch instance |
+| `/latest/meta-data/iam/security-credentials/` | Temporary IAM credentials   |
+
+### IMDSv1 vs IMDSv2
+
+| Feature               | IMDSv1 (Legacy)          | IMDSv2 (Enforced)        |
+| --------------------- | ------------------------ | ------------------------ |
+| **Authentication**    | None                     | Session token required   |
+| **Security**          | Vulnerable to SSRF       | Protected against SSRF   |
+| **Access Method**     | Simple HTTP GET          | Token + HTTP GET         |
+| **Terraform Setting** | `http_tokens = optional` | `http_tokens = required` |
+
+### Why IMDSv2?
+
+**IMDSv1 Vulnerability (SSRF Attack)**:
+
+```bash
+# Attacker exploits application to access metadata
+curl http://169.254.169.254/latest/meta-data/iam/security-credentials/role-name
+# Returns temporary AWS credentials - attacker can now access AWS services!
+```
+
+**IMDSv2 Protection**:
+
+```bash
+# Step 1: Get session token (requires PUT request - harder to exploit)
+TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+
+# Step 2: Use token to access metadata
+curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id
+```
+
+**Enforcement in Terraform:**
+
+```hcl
+metadata_options {
+  http_tokens = "required"  # Forces IMDSv2, blocks IMDSv1
+  http_put_response_hop_limit = 1  # Prevents containers from accessing metadata
+}
+```
+
+---
+
+## Auto Scaling Groups
+
+Auto Scaling Groups manage instance lifecycle, ensuring desired capacity across availability zones.
+
+### Backend Auto Scaling Group
+
+```hcl
+resource "aws_autoscaling_group" "backend_asg" {
+  name                = "${var.project_name}-backend-asg"
+  vpc_zone_identifier = [aws_subnet.private_subnet_1.id, aws_subnet.private_subnet_2.id]
+  target_group_arns   = [aws_lb_target_group.backend_tg.arn]
+  health_check_type   = "ELB"
+  health_check_grace_period = 300
+
+  min_size         = var.backend_min_size          # Default: 2
+  max_size         = var.backend_max_size          # Default: 4
+  desired_capacity = var.backend_desired_capacity  # Default: 2
+
+  launch_template {
+    id      = aws_launch_template.backend_lt.id
+    version = "$Latest"
+  }
+
+  tag {
+    key                 = "Name"
+    value               = "${var.project_name}-backend"
+    propagate_at_launch = true
+  }
+}
+```
+
+### Configuration Parameters
+
+#### 1. VPC Zone Identifier (Subnets)
+
+```hcl
+vpc_zone_identifier = [aws_subnet.private_subnet_1.id, aws_subnet.private_subnet_2.id]
+```
+
+| Setting          | Value                                                |
+| ---------------- | ---------------------------------------------------- |
+| **Subnets**      | Private subnets in 2 different availability zones    |
+| **Why Private**  | Instances don't need public IPs                      |
+| **Why Multi-AZ** | High availability - if one AZ fails, other continues |
+| **Distribution** | ASG evenly distributes instances across subnets      |
+
+#### 2. Target Group Association
+
+```hcl
+target_group_arns = [aws_lb_target_group.backend_tg.arn]
+```
+
+| Setting            | Description                                      |
+| ------------------ | ------------------------------------------------ |
+| **Purpose**        | Automatically registers new instances with ALB   |
+| **Health Checks**  | ALB performs health checks on registered targets |
+| **Deregistration** | Unhealthy instances removed from rotation        |
+
+#### 3. Health Check Configuration
+
+```hcl
+health_check_type         = "ELB"
+health_check_grace_period = 300  # 5 minutes
+```
+
+| Setting             | Value | Why This Value?                                       |
+| ------------------- | ----- | ----------------------------------------------------- |
+| `health_check_type` | `ELB` | Use ALB health checks (more accurate than EC2)        |
+| `grace_period`      | `300` | Wait 5 min for instance to initialize before checking |
+
+**Health Check Process:**
+
+1. Instance launches and runs user data script
+2. ASG waits 5 minutes (grace period) before checking health
+3. ALB checks `/health` endpoint on backend (port 8000)
+4. If unhealthy after grace period, ASG terminates and replaces instance
+
+#### 4. Capacity Configuration
+
+```hcl
+min_size         = 2
+max_size         = 4
+desired_capacity = 2
+```
+
+| Capacity    | Value | Why This Value?                                |
+| ----------- | ----- | ---------------------------------------------- |
+| **Min**     | `2`   | Always 2 instances minimum (high availability) |
+| **Max**     | `4`   | Limit scaling to control costs                 |
+| **Desired** | `2`   | Normal operating capacity                      |
+
+**Scaling Behavior:**
+
+- **Normal Traffic**: 2 instances running
+- **High Traffic (CPU >70%)**: Scale up to 3, then 4 instances
+- **Low Traffic (CPU <30%)**: Scale down to 3, then 2 instances
+- **Never Below Min**: Always maintain 2 instances for availability
+
+### Scaling Policies
+
+#### Scale Up Policy
+
+```hcl
+resource "aws_autoscaling_policy" "backend_scale_up" {
+  name                   = "${var.project_name}-backend-scale-up"
+  scaling_adjustment     = 1
+  adjustment_type        = "ChangeInCapacity"
+  cooldown               = 300
+  autoscaling_group_name = aws_autoscaling_group.backend_asg.name
+}
+```
+
+| Setting              | Value              | Description                           |
+| -------------------- | ------------------ | ------------------------------------- |
+| `scaling_adjustment` | `1`                | Add 1 instance at a time              |
+| `adjustment_type`    | `ChangeInCapacity` | Add/remove instances (not percentage) |
+| `cooldown`           | `300`              | Wait 5 min before scaling again       |
+
+#### CloudWatch Alarm (Trigger)
+
+```hcl
+resource "aws_cloudwatch_metric_alarm" "backend_cpu_high" {
+  alarm_name          = "${var.project_name}-backend-cpu-high"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = 120
+  statistic           = "Average"
+  threshold           = 70
+
+  dimensions = {
+    AutoScalingGroupName = aws_autoscaling_group.backend_asg.name
+  }
+
+  alarm_actions = [aws_autoscaling_policy.backend_scale_up.arn]
+}
+```
+
+**How It Works:**
+
+1. CloudWatch monitors average CPU across all backend instances
+2. If CPU >70% for 2 consecutive 2-minute periods (4 minutes total)
+3. Alarm triggers scale-up policy
+4. ASG launches 1 additional instance
+5. Cooldown period prevents immediate additional scaling
+
+---
+
+## Instance Access via Systems Manager
+
+### Why Systems Manager Instead of SSH?
+
+| Feature            | SSH with Keys                | Systems Manager           |
+| ------------------ | ---------------------------- | ------------------------- |
+| **Authentication** | SSH key pairs                | IAM policies              |
+| **Key Management** | Store, rotate, distribute    | None needed               |
+| **Bastion Host**   | Required for private subnets | Not needed                |
+| **Audit Trail**    | Manual logging               | Automatic CloudTrail logs |
+| **Network Access** | Port 22 must be open         | Uses HTTPS (port 443)     |
+| **Cost**           | Bastion host ~$15-30/mo      | Free (included with EC2)  |
+
+### Connecting to Instances
+
+#### Via AWS Console
+
+1. Go to **EC2 Console** → **Instances**
+2. Select instance
+3. Click **Connect** button
+4. Choose **Session Manager** tab
+5. Click **Connect**
+
+#### Via AWS CLI
+
+```bash
+# List instances in Auto Scaling Group
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names ollama-chat-app-backend-asg \
+  --query "AutoScalingGroups[0].Instances[*].[InstanceId,HealthStatus]" \
+  --output table
+
+# Connect to specific instance
+aws ssm start-session --target i-1234567890abcdef0
+```
+
+#### Via VS Code
+
+1. Install **AWS Toolkit** extension
+2. Configure AWS credentials
+3. Navigate to **EC2** in AWS Explorer
+4. Right-click instance → **Connect via Session Manager**
+
+### Session Manager Capabilities
+
+Once connected, you can:
+
+```bash
+# Check application status
+systemctl status docker
+ps aux | grep python
+ps aux | grep node
+
+# View logs
+tail -f /var/log/user-data.log
+journalctl -u docker -f
+
+# Test application locally
+curl http://localhost:8000/health
+curl http://localhost:3000
+
+# Debug network
+netstat -tlnp
+ss -tlnp
+
+# Check IAM role
+curl http://169.254.169.254/latest/meta-data/iam/info
+```
+
+### IAM Requirements
+
+**For Users (to connect):**
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["ssm:StartSession", "ssm:TerminateSession"],
+      "Resource": [
+        "arn:aws:ec2:*:*:instance/*",
+        "arn:aws:ssm:*:*:session/${aws:username}-*"
+      ]
+    }
+  ]
+}
+```
+
+**For Instances (IAM role):**
+
+- Policy: `AmazonSSMManagedInstanceCore` (attached to `ollama_ec2_role`)
+
+---
+
+## How EC2 Fits Into the Infrastructure
+
+### Request Flow
+
+```
+1. User Request
+   ↓
+2. DNS → ALB DNS Name
+   ↓
+3. ALB Security Group (allow 80/443)
+   ↓
+4. ALB Listener Rules
+   ├─ /api/* → Backend Target Group
+   │            ↓
+   │         Backend Security Group (allow 8000 from ALB)
+   │            ↓
+   │         Backend EC2 Instances
+   │            ↓
+   │         Flask app forwards to Ollama container
+   │
+   └─ /* → Frontend Target Group
+               ↓
+            Frontend Security Group (allow 3000 from ALB)
+               ↓
+            Frontend EC2 Instances
+               ↓
+            Serve static React build
+```
+
+### Infrastructure Dependencies
+
+```
+Launch Template
+   ↓
+   ├─ AMI (what to run)
+   ├─ Instance Type (hardware specs)
+   ├─ Security Group (firewall rules)
+   ├─ IAM Instance Profile (permissions)
+   ├─ User Data Script (bootstrap)
+   └─ Metadata Options (IMDSv2)
+   ↓
+Auto Scaling Group
+   ↓
+   ├─ Subnets (where to place)
+   ├─ Target Group (load balancer integration)
+   ├─ Health Checks (how to monitor)
+   └─ Scaling Policies (when to scale)
+   ↓
+EC2 Instances (managed automatically)
+```
+
+---
+
+## Design Decisions
+
+### 1. Why Auto Scaling Only (No Single-Instance Mode)?
+
+**Decision**: Removed single-instance deployment entirely
+
+**Rationale:**
+
+- **Simplicity**: One deployment model, less complexity
+- **High Availability**: Auto Scaling provides fault tolerance
+- **Production-Ready**: Encourages best practices from the start
+- **Cost**: Difference minimal (2 t3.small vs 1 t3.medium)
+- **Learning**: Better to learn production architecture early
+
+**Cost Comparison:**
+
+```
+Single Instance:   1 × t3.medium  = $0.0416/hour = ~$30/month
+Auto Scaling:      2 × t3.small   = $0.0208/hour = ~$30/month
+```
+
+### 2. Why Private Subnets for Instances?
+
+**Decision**: All EC2 instances in private subnets
+
+**Rationale:**
+
+- **Security**: No direct internet exposure
+- **Defense in Depth**: Attack must breach ALB first
+- **Best Practice**: Industry standard for web applications
+- **NAT Gateway**: Provides outbound internet for updates
+- **Compliance**: Meets most security frameworks
+
+**Alternative Considered**: Public subnets
+
+- ❌ Every instance has public IP (larger attack surface)
+- ❌ More difficult to secure
+- ❌ Not production-grade
+
+### 3. Why Systems Manager Instead of SSH?
+
+**Decision**: No SSH keys, use Systems Manager
+
+**Rationale:**
+
+- **No Key Management**: Eliminates key distribution, rotation, storage
+- **IAM-Based**: Centralized access control
+- **Audit Trail**: Every session logged to CloudTrail
+- **No Bastion**: Saves $15-30/month and security overhead
+- **Port 443 Only**: Works through corporate firewalls
+
+**Alternative Considered**: SSH with bastion host
+
+- ❌ Requires managing bastion instance
+- ❌ Requires SSH key distribution
+- ❌ Additional cost and security surface
+- ❌ Manual audit logging
+
+### 4. Why IMDSv2 Required?
+
+**Decision**: Enforce IMDSv2 (`http_tokens = required`)
+
+**Rationale:**
+
+- **SSRF Protection**: Prevents metadata access via application vulnerabilities
+- **Security Best Practice**: AWS recommendation
+- **Container Security**: `hop_limit = 1` prevents container access
+- **No Downside**: Modern SDKs support IMDSv2
+
+**Alternative Considered**: IMDSv1 optional
+
+- ❌ Vulnerable to SSRF attacks
+- ❌ Not compliant with security frameworks
+
+### 5. Why Stateless Architecture?
+
+**Decision**: No EBS volumes, no persistent storage
+
+**Rationale:**
+
+- **Application Design**: Backend forwards to Ollama (no database)
+- **Frontend Storage**: Uses localStorage only
+- **Simplicity**: No storage management needed
+- **Cost**: Eliminates EBS charges (~$8-10/month per volume)
+- **Scalability**: Instances are identical, easily replaceable
+
+**What About Data Loss?**
+
+- Backend: No state - each request is independent
+- Frontend: User data in browser localStorage (client-side)
+- Ollama Models: Cached in Docker container (re-downloaded if needed)
+
+### 6. Why Multi-AZ Auto Scaling?
+
+**Decision**: Distribute instances across 2 availability zones
+
+**Rationale:**
+
+- **High Availability**: If one datacenter fails, other continues
+- **Load Distribution**: Even spread of traffic
+- **ALB Requirement**: ALB needs 2+ subnets in different AZs
+- **Cost**: Minimal (same instance hours, just distributed)
+
+**Failure Scenario:**
+
+```
+Normal: 2 instances (1 in each AZ)
+AZ-1 Fails: 1 instance in AZ-2 continues serving traffic
+Auto Scaling: Launches replacement in AZ-2 to maintain min capacity
+```
 
 ---
 
 ## Troubleshooting
 
-### Common EC2 Issues
+### 1. Instances Not Launching
 
-#### 1. Instance Won't Launch
+**Symptoms:**
 
-| Problem                   | Possible Cause               | Solution                                  |
-| ------------------------- | ---------------------------- | ----------------------------------------- |
-| **Terraform apply fails** | Invalid AMI ID               | Verify AMI exists in your region          |
-| **Terraform apply fails** | Instance type not available  | Check AZ availability, try different type |
-| **Terraform apply fails** | Subnet has no available IPs  | Use larger CIDR block or different subnet |
-| **Terraform apply fails** | Security group rules invalid | Check CIDR blocks and port ranges         |
+- Auto Scaling Group shows 0 instances
+- Instances launch and immediately terminate
 
-**Debugging**:
+**Common Causes:**
 
-```bash
-# Check available instance types in AZ
-aws ec2 describe-instance-type-offerings \
-  --location-type availability-zone \
-  --filters Name=location,Values=us-east-1a \
-  --region us-east-1
+| Issue                        | Check                                               | Solution                                   |
+| ---------------------------- | --------------------------------------------------- | ------------------------------------------ |
+| **User data script fails**   | CloudWatch Logs or `/var/log/cloud-init-output.log` | Fix script syntax, test manually           |
+| **AMI not found**            | Check `var.ami_id` is valid in region               | Update to correct AMI ID                   |
+| **Security group not found** | Verify security group exists                        | Check Terraform dependencies               |
+| **IAM role not attached**    | Instance profile configuration                      | Verify IAM role and instance profile exist |
+| **Insufficient capacity**    | AWS capacity issues in AZ                           | Try different instance type or region      |
 
-# Verify AMI exists
-aws ec2 describe-images --image-ids ami-0abcdef1234567890
-```
-
-#### 2. Instance Launches But User Data Fails
-
-| Symptom                     | Cause                      | Solution                                   |
-| --------------------------- | -------------------------- | ------------------------------------------ |
-| **Application not running** | User data script failed    | Check `/var/log/cloud-init-output.log`     |
-| **Partial setup**           | Script error mid-execution | Add `set -e` to exit on error              |
-| **No logs**                 | Log redirection failed     | Use `exec > >(tee /var/log/user-data.log)` |
-
-**Debugging**:
+**Debugging:**
 
 ```bash
-# SSH into instance
-ssh -i your-key.pem ec2-user@<instance-public-ip>
+# Check Auto Scaling activities
+aws autoscaling describe-scaling-activities \
+  --auto-scaling-group-name ollama-chat-app-backend-asg \
+  --max-records 10
 
-# Check user data execution
-sudo cat /var/log/cloud-init-output.log | tail -100
+# Check if launch template is valid
+aws ec2 describe-launch-template-versions \
+  --launch-template-id lt-xxx
 
-# Check for errors
-sudo cat /var/log/cloud-init.log | grep -i error
-
-# View user data script
-sudo cat /var/lib/cloud/instance/user-data.txt
-
-# Manually run user data for testing
-sudo bash /var/lib/cloud/instance/user-data.txt
+# Manually launch instance to test
+aws ec2 run-instances \
+  --launch-template LaunchTemplateId=lt-xxx \
+  --subnet-id subnet-xxx
 ```
 
-#### 3. Instance Running But Unreachable
+### 2. Instances Failing Health Checks
 
-| Problem                   | Check                             | Fix                              |
-| ------------------------- | --------------------------------- | -------------------------------- |
-| **Cannot SSH**            | Security group allows port 22?    | Add ingress rule for SSH         |
-| **Cannot SSH**            | Using correct key pair?           | Verify key name in Terraform     |
-| **Cannot SSH**            | Network ACL blocking?             | Check NACL rules                 |
-| **Cannot access web app** | Security group allows HTTP/HTTPS? | Add ingress rules for 80/443     |
-| **Cannot access web app** | Application actually running?     | SSH in and check `netstat -tlnp` |
+**Symptoms:**
 
-**Debugging**:
+- Instances launch but are marked unhealthy
+- Auto Scaling continuously replaces instances
+
+**Common Causes:**
+
+| Issue                        | Check                                  | Solution                                      |
+| ---------------------------- | -------------------------------------- | --------------------------------------------- |
+| **Application not starting** | User data logs                         | Fix bootstrap script                          |
+| **Wrong health check port**  | Target group health check settings     | Verify port 8000 (backend) or 3000 (frontend) |
+| **Grace period too short**   | Instance needs more time to initialize | Increase `health_check_grace_period` to 600   |
+| **Security group blocking**  | ALB can't reach instance port          | Verify security group allows ALB traffic      |
+| **Application crashed**      | Application logs                       | Fix application errors                        |
+
+**Debugging:**
 
 ```bash
-# Test security group (from local machine)
-telnet <instance-public-ip> 22  # Should connect if SG allows SSH
-telnet <instance-public-ip> 80  # Should connect if SG allows HTTP
+# Check target group health
+aws elbv2 describe-target-health \
+  --target-group-arn arn:aws:elasticloadbalancing:...
 
-# Check if application is listening (on instance)
-sudo netstat -tlnp | grep :8000  # Backend
-sudo netstat -tlnp | grep :3000  # Frontend
+# Connect to instance via Session Manager
+aws ssm start-session --target i-xxx
 
-# Check security group rules
-aws ec2 describe-security-groups --group-ids sg-0abcdef1234567890
+# Check application status
+systemctl status docker
+curl http://localhost:8000/health
+curl http://localhost:3000
+
+# Check logs
+tail -f /var/log/user-data.log
+journalctl -xe
 ```
 
-#### 4. Instance Performance Issues
+### 3. Cannot Connect via Session Manager
 
-| Symptom                | Possible Cause      | Solution                              |
-| ---------------------- | ------------------- | ------------------------------------- |
-| **High CPU**           | Undersized instance | Upgrade to larger instance type       |
-| **High CPU**           | Infinite loop/bug   | Check application logs                |
-| **High disk I/O wait** | Slow EBS volume     | Switch to gp3 or increase IOPS        |
-| **Out of memory**      | Memory leak         | Increase instance memory or fix leak  |
-| **Slow network**       | Network throttling  | Use enhanced networking instance type |
+**Symptoms:**
 
-**Debugging**:
+- "Session Manager is not available" error
+- Instance not listed in Session Manager
+
+**Common Causes:**
+
+| Issue                           | Check                              | Solution                              |
+| ------------------------------- | ---------------------------------- | ------------------------------------- |
+| **IAM role not attached**       | Instance IAM role                  | Attach `AmazonSSMManagedInstanceCore` |
+| **SSM agent not running**       | Agent status on instance           | Install/restart SSM agent             |
+| **No internet connectivity**    | Instance can't reach SSM endpoints | Check NAT Gateway, route tables       |
+| **Security group blocking 443** | Outbound rules                     | Allow HTTPS (443) outbound            |
+| **User lacks permissions**      | Your IAM user/role                 | Add `ssm:StartSession` permission     |
+
+**Debugging:**
 
 ```bash
-# Check CPU usage
-top
-htop  # If installed
+# Check if instance is managed
+aws ssm describe-instance-information \
+  --filters "Key=tag:Name,Values=ollama-chat-app-backend"
 
-# Check memory
-free -h
+# Check IAM role on instance
+aws ec2 describe-instances --instance-ids i-xxx \
+  --query "Reservations[0].Instances[0].IamInstanceProfile"
 
-# Check disk I/O
-iostat -x 1
-
-# Check network
-iftop  # If installed
+# Test SSM endpoint connectivity (if you can SSH)
+telnet ssm.us-east-1.amazonaws.com 443
 ```
 
-#### 5. IAM Permission Issues
+### 4. High CPU / Instances Not Scaling
 
-| Error Message                  | Cause                     | Solution                              |
-| ------------------------------ | ------------------------- | ------------------------------------- |
-| **Access Denied (CloudWatch)** | Missing CloudWatch policy | Attach `CloudWatchAgentServerPolicy`  |
-| **Access Denied (SSM)**        | Missing SSM policy        | Attach `AmazonSSMManagedInstanceCore` |
-| **Access Denied (S3)**         | No S3 permissions         | Add custom policy for S3 access       |
+**Symptoms:**
 
-**Debugging**:
+- CPU consistently >70% but no scaling
+- Not enough instances to handle traffic
+
+**Common Causes:**
+
+| Issue                         | Check                       | Solution                           |
+| ----------------------------- | --------------------------- | ---------------------------------- |
+| **Reached max capacity**      | Current count vs `max_size` | Increase `max_size` if needed      |
+| **Alarm not configured**      | CloudWatch alarm state      | Verify alarm exists and is enabled |
+| **Cooldown period**           | Recent scaling activity     | Wait for cooldown to expire        |
+| **Insufficient instance cap** | AWS account limits          | Request service quota increase     |
+
+**Debugging:**
 
 ```bash
-# Check what role is attached
-aws sts get-caller-identity
+# Check current capacity
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names ollama-chat-app-backend-asg \
+  --query "AutoScalingGroups[0].[MinSize,DesiredCapacity,MaxSize]"
 
-# Try to access service
-aws s3 ls  # Will fail if no S3 permissions
-aws logs describe-log-groups  # Will fail if no CloudWatch permissions
+# Check CloudWatch alarm
+aws cloudwatch describe-alarms \
+  --alarm-names ollama-chat-app-backend-cpu-high
+
+# Check recent scaling activities
+aws autoscaling describe-scaling-activities \
+  --auto-scaling-group-name ollama-chat-app-backend-asg \
+  --max-records 5
 ```
 
-#### 6. EBS Volume Issues
+### 5. Application Not Responding
 
-| Problem                  | Cause             | Solution                            |
-| ------------------------ | ----------------- | ----------------------------------- |
-| **Volume not attached**  | Wrong device name | Check `/dev/xvdf` vs `/dev/sdf`     |
-| **Volume not formatted** | New volume        | Format with `mkfs.ext4`             |
-| **Volume not mounted**   | No mount entry    | Add to `/etc/fstab`                 |
-| **Volume full**          | Insufficient size | Resize volume and extend filesystem |
+**Symptoms:**
 
-**Debugging**:
+- 502/504 errors from ALB
+- Timeouts on requests
+
+**Common Causes:**
+
+| Issue                            | Check                       | Solution                            |
+| -------------------------------- | --------------------------- | ----------------------------------- |
+| **App not listening on port**    | `netstat -tlnp` on instance | Fix application configuration       |
+| **Docker container not running** | `docker ps`                 | Restart container, check logs       |
+| **Ollama not responding**        | `docker logs ollama`        | Restart Ollama container            |
+| **Out of memory**                | `free -h`                   | Increase instance type memory       |
+| **File descriptors exhausted**   | `ulimit -n`                 | Increase limits in user data script |
+
+**Debugging:**
 
 ```bash
-# List block devices
-lsblk
+# Connect to instance
+aws ssm start-session --target i-xxx
 
-# Check if volume is attached
-ls -l /dev/xvdf
+# Check what's listening
+sudo netstat -tlnp | grep -E ':(8000|3000|11434)'
 
-# Check mount status
-df -h
+# Check Docker containers
+sudo docker ps -a
 
-# Mount volume manually
-sudo mkdir -p /mnt/ollama-models
-sudo mount /dev/xvdf /mnt/ollama-models
+# Check application logs
+sudo journalctl -u docker -f
+tail -f /var/log/user-data.log
+
+# Test locally
+curl http://localhost:8000/health
+curl http://localhost:3000
+curl http://localhost:11434/api/version  # Ollama
 ```
-
-### Monitoring and Alerting
-
-**Set Up CloudWatch Alarms**:
-
-```hcl
-resource "aws_cloudwatch_metric_alarm" "instance_cpu_high" {
-  alarm_name          = "ollama-instance-cpu-high"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = "2"
-  metric_name         = "CPUUtilization"
-  namespace           = "AWS/EC2"
-  period              = "120"
-  statistic           = "Average"
-  threshold           = "80"
-  alarm_description   = "This metric monitors EC2 CPU utilization"
-  alarm_actions       = [aws_sns_topic.alerts.arn]
-
-  dimensions = {
-    InstanceId = aws_instance.ollama_app.id
-  }
-}
-```
-
-**Key Metrics to Monitor**:
-
-- CPU Utilization (>80% sustained)
-- Disk Space (>85% full)
-- Memory Usage (>90%)
-- Status Check Failed (instance or system)
-- Network In/Out (unusual spikes)
 
 ---
 
 ## Summary
 
-### EC2 Instance Role in Infrastructure
-
-EC2 instances are the **compute foundation** of the Ollama Chat infrastructure:
-
-1. **Network Layer**: EC2 instances are placed in subnets within a VPC
-2. **Security Layer**: Protected by security groups and IAM roles
-3. **Storage Layer**: Use EBS volumes for persistent data
-4. **Application Layer**: Run the Flask backend and React frontend
-5. **Monitoring Layer**: Send metrics and logs to CloudWatch
-
 ### Key Takeaways
 
-| Topic             | Key Point                                                                  |
-| ----------------- | -------------------------------------------------------------------------- |
-| **AMI**           | Use variables for AMIs; ignore changes in lifecycle to prevent replacement |
-| **Instance Type** | Choose based on workload (t3 for dev, c5 for production, g4dn for GPU)     |
-| **Storage**       | Use gp3 volumes with encryption; separate root and data volumes            |
-| **User Data**     | Automate instance setup; log everything for debugging                      |
-| **IMDSv2**        | Always enforce IMDSv2 for security                                         |
-| **IAM**           | Attach instance profile for AWS service access                             |
-| **Networking**    | Public subnet for single-instance, private for auto-scaling                |
-| **Lifecycle**     | Use ignore_changes for AMI, create_before_destroy for updates              |
+| Topic                | Key Point                                                     |
+| -------------------- | ------------------------------------------------------------- |
+| **Architecture**     | Auto Scaling only - no single-instance mode                   |
+| **Networking**       | Private subnets across 2 AZs for high availability            |
+| **Access**           | Systems Manager (no SSH keys or bastion hosts)                |
+| **Storage**          | Stateless - no persistent storage or EBS volumes              |
+| **Scaling**          | CPU-based with min 2, max 4 instances per service             |
+| **Security**         | IMDSv2 required, security groups restrict traffic to ALB only |
+| **Launch Templates** | Define instance configuration for Auto Scaling                |
+| **User Data**        | Bootstrap scripts install and start application               |
+| **Health Checks**    | ALB health checks determine instance health                   |
+| **IAM**              | Instance profile with SSM policy only (no other AWS access)   |
 
-### Next Steps
+### Production Readiness Checklist
 
-1. **For Development**: Deploy single-instance architecture to learn fundamentals
-2. **For Production**: Graduate to auto-scaling architecture for reliability
-3. **For Optimization**: Implement monitoring, alarms, and automated backups
-4. **For Scaling**: Add more sophisticated auto-scaling policies and multi-region deployment
+- ✅ Multi-AZ deployment (2 availability zones)
+- ✅ Auto Scaling Groups (automatic capacity management)
+- ✅ Private subnets (instances not directly internet-accessible)
+- ✅ Systems Manager access (secure, audited instance access)
+- ✅ IMDSv2 enforced (protects against SSRF attacks)
+- ✅ Health checks configured (automatic failure detection)
+- ✅ CloudWatch alarms (triggers auto-scaling)
+- ✅ Security groups (restrictive ingress, permissive egress)
+- ✅ Stateless design (no data loss on instance replacement)
+- ✅ Terraform managed (infrastructure as code)
 
 ---
 
 ## Related Documentation
 
-- [Networking Guide](./ollama-chat-prod-networking.md) - VPC, subnets, routing
-- [Security Group Guide](./securitygroup-GUIDE.md) - Firewall configuration, SSH access
-- [IAM Guide](./iam-GUIDE.md) - Roles, policies, permissions
+- [Networking Guide](./prod-networking.md) - VPC, subnets, NAT Gateways, routing
+- [Security Groups Guide](./security-groups.md) - Firewall rules, port configuration
+- [IAM Guide](./iam.md) - Roles, policies, permissions for SSM access
+- [Auto Scaling Guide](./auto-scaling.md) - Scaling policies, CloudWatch alarms
+- [Application Load Balancer Guide](./alb.md) - Target groups, health checks, listeners
 - [AWS EC2 User Guide](https://docs.aws.amazon.com/ec2/) - Official AWS documentation
+- [AWS Systems Manager Guide](https://docs.aws.amazon.com/systems-manager/) - Session Manager details
+
+---
+
+**Last Updated**: November 26, 2025
+**Architecture**: Simplified auto-scaling only (no storage, no single-instance mode)
+**Terraform Version**: >= 1.0
+**AWS Provider Version**: ~> 5.0

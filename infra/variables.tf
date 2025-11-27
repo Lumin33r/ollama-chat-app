@@ -17,16 +17,9 @@ variable "environment" {
 }
 
 variable "ami_id" {
-  description = "AMI ID for EC2 instance"
+  description = "AMI ID for EC2 instances"
   type        = string
   default     = "ami-0f00d706c4a80fd93"
-}
-
-variable "instance_type" {
-  description = "EC2 instance type"
-  type        = string
-  default     = "t3.xlarge"
-  # Options: t3.xlarge, g4dn.xlarge, g5.xlarge
 }
 
 variable "vpc_cidr" {
@@ -60,28 +53,9 @@ variable "private_subnet_2_cidr" {
 }
 
 variable "allowed_ssh_cidr" {
-  description = "CIDR blocks allowed to SSH"
+  description = "CIDR blocks allowed to SSH (kept for potential bastion host, not used in current config)"
   type        = list(string)
-  default     = ["0.0.0.0/0"] # Change to your IP for security
-}
-
-variable "ssh_public_key" {
-  description = "SSH public key content"
-  type        = string
-  # Generate with: ssh-keygen -t rsa -b 4096 -f ~/.ssh/ollama-key
-  # Then: cat ~/.ssh/ollama-key.pub
-}
-
-variable "root_volume_size" {
-  description = "Root volume size in GB"
-  type        = number
-  default     = 50
-}
-
-variable "ebs_volume_size" {
-  description = "EBS volume size for Ollama models in GB"
-  type        = number
-  default     = 100
+  default     = ["10.0.0.0/16"] # VPC CIDR only
 }
 
 variable "git_repo_url" {
@@ -94,24 +68,6 @@ variable "ollama_model" {
   description = "Ollama model to pull on startup"
   type        = string
   default     = "llama3.2:1b"
-}
-
-variable "domain_name" {
-  description = "Domain name for the application (optional)"
-  type        = string
-  default     = ""
-}
-
-variable "log_retention_days" {
-  description = "CloudWatch log retention in days"
-  type        = number
-  default     = 7
-}
-
-variable "enable_auto_scaling" {
-  description = "Enable Auto Scaling Groups for backend and frontend"
-  type        = bool
-  default     = true
 }
 
 variable "backend_min_size" {

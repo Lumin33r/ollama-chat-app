@@ -96,51 +96,22 @@ output "frontend_target_group_arn" {
 
 output "backend_asg_name" {
   description = "The name of the backend Auto Scaling Group"
-  value       = var.enable_auto_scaling ? aws_autoscaling_group.backend_asg[0].name : "Auto Scaling disabled"
+  value       = aws_autoscaling_group.backend_asg.name
 }
 
 output "frontend_asg_name" {
   description = "The name of the frontend Auto Scaling Group"
-  value       = var.enable_auto_scaling ? aws_autoscaling_group.frontend_asg[0].name : "Auto Scaling disabled"
+  value       = aws_autoscaling_group.frontend_asg.name
 }
 
 output "backend_asg_arn" {
   description = "The ARN of the backend Auto Scaling Group"
-  value       = var.enable_auto_scaling ? aws_autoscaling_group.backend_asg[0].arn : null
+  value       = aws_autoscaling_group.backend_asg.arn
 }
 
 output "frontend_asg_arn" {
   description = "The ARN of the frontend Auto Scaling Group"
-  value       = var.enable_auto_scaling ? aws_autoscaling_group.frontend_asg[0].arn : null
-}
-
-# ========================================
-# EC2 Instance Outputs (Single-Instance Mode)
-# ========================================
-
-output "ec2_instance_id" {
-  description = "The ID of the EC2 instance (single-instance mode)"
-  value       = aws_instance.ollama_app.id
-}
-
-output "ec2_public_ip" {
-  description = "The public IP of the EC2 instance"
-  value       = aws_eip.ollama_eip.public_ip
-}
-
-output "ec2_private_ip" {
-  description = "The private IP of the EC2 instance"
-  value       = aws_instance.ollama_app.private_ip
-}
-
-output "ec2_public_dns" {
-  description = "The public DNS of the EC2 instance"
-  value       = aws_instance.ollama_app.public_dns
-}
-
-output "ssh_command" {
-  description = "SSH command to connect to the EC2 instance"
-  value       = "ssh -i ~/.ssh/${var.project_name}-key ubuntu@${aws_eip.ollama_eip.public_ip}"
+  value       = aws_autoscaling_group.frontend_asg.arn
 }
 
 # ========================================
@@ -162,11 +133,6 @@ output "frontend_security_group_id" {
   value       = aws_security_group.frontend_sg.id
 }
 
-output "single_instance_security_group_id" {
-  description = "The ID of the single-instance security group"
-  value       = aws_security_group.ollama_sg.id
-}
-
 # ========================================
 # IAM Outputs
 # ========================================
@@ -179,15 +145,6 @@ output "ec2_iam_role_arn" {
 output "ec2_instance_profile_name" {
   description = "The name of the EC2 instance profile"
   value       = aws_iam_instance_profile.ollama_profile.name
-}
-
-# ========================================
-# CloudWatch Outputs
-# ========================================
-
-output "cloudwatch_log_group_name" {
-  description = "The name of the CloudWatch log group"
-  value       = aws_cloudwatch_log_group.ollama_logs.name
 }
 
 # ========================================
@@ -208,24 +165,18 @@ output "deployment_instructions" {
     Backend API URL:     http://${aws_lb.app_lb.dns_name}/api
     Health Check:        http://${aws_lb.app_lb.dns_name}/health
 
-    SINGLE EC2 INSTANCE (Development/Testing):
-    ------------------------------------------
-    SSH Command:         ssh -i ~/.ssh/${var.project_name}-key ubuntu@${aws_eip.ollama_eip.public_ip}
-    Instance ID:         ${aws_instance.ollama_app.id}
-    Public IP:           ${aws_eip.ollama_eip.public_ip}
-
     AUTO SCALING CONFIGURATION:
     ---------------------------
-    Backend ASG:         ${var.enable_auto_scaling ? aws_autoscaling_group.backend_asg[0].name : "Disabled"}
+    Backend ASG:         ${aws_autoscaling_group.backend_asg.name}
       Min: ${var.backend_min_size}, Max: ${var.backend_max_size}, Desired: ${var.backend_desired_capacity}
 
-    Frontend ASG:        ${var.enable_auto_scaling ? aws_autoscaling_group.frontend_asg[0].name : "Disabled"}
+    Frontend ASG:        ${aws_autoscaling_group.frontend_asg.name}
       Min: ${var.frontend_min_size}, Max: ${var.frontend_max_size}, Desired: ${var.frontend_desired_capacity}
 
-    MONITORING & LOGGING:
-    ---------------------
-    CloudWatch Logs:     ${aws_cloudwatch_log_group.ollama_logs.name}
-    View Logs:           aws logs tail ${aws_cloudwatch_log_group.ollama_logs.name} --follow
+    INSTANCE ACCESS:
+    ----------------
+    Use AWS Systems Manager Session Manager to connect to instances
+    No SSH keys required - IAM-based access via SSM
 
     INFRASTRUCTURE DETAILS:
     -----------------------
@@ -239,10 +190,10 @@ output "deployment_instructions" {
     -----------
     1. Update DNS records to point to ALB: ${aws_lb.app_lb.dns_name}
     2. Configure SSL/TLS certificate on ALB for HTTPS
-    3. Review security group rules and restrict SSH access
-    4. Set up CloudWatch alarms and dashboards
-    5. Configure application secrets and environment variables
-    6. Test health checks and auto-scaling policies
+    3. Set up CloudWatch alarms and dashboards
+    4. Configure application secrets and environment variables
+    5. Test health checks and auto-scaling policies
+    6. Use Session Manager to access instances for troubleshooting
 
     ========================================
   EOT

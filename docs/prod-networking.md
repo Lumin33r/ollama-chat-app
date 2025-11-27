@@ -25,16 +25,19 @@ A comprehensive guide to the network infrastructure design for the Ollama Chat A
 The Ollama Chat App uses a **multi-tier network architecture** with:
 
 - **Public Tier**: Hosts the Application Load Balancer (ALB) and NAT Gateways
-- **Private Tier**: Hosts backend and frontend application instances
+- **Private Tier**: Hosts backend and frontend application instances (Auto Scaling Groups only)
 - **Multi-AZ Deployment**: Spans 2 Availability Zones for high availability
 - **Defense in Depth**: Uses Security Groups + Network ACLs
+- **Stateless Design**: No persistent storage - application runs entirely in memory
 
 ### Why This Architecture?
 
 1. **Security**: Application instances are isolated in private subnets with no direct internet access
-2. **High Availability**: Multi-AZ deployment ensures resilience against data center failures
-3. **Scalability**: Auto Scaling Groups can add/remove instances across multiple subnets
-4. **Cost Efficiency**: NAT Gateways enable outbound internet for updates without requiring public IPs on every instance
+2. **High Availability**: Multi-AZ deployment with Auto Scaling ensures resilience against failures
+3. **Scalability**: Auto Scaling Groups dynamically add/remove instances based on CPU load
+4. **Simplicity**: No storage management - stateless application architecture
+5. **Secure Access**: Systems Manager (SSM) Session Manager for instance access (no SSH keys required)
+6. **Cost Efficiency**: NAT Gateways enable outbound internet for updates without requiring public IPs on every instance
 
 ---
 
@@ -179,13 +182,14 @@ Host **internet-facing resources** like the Application Load Balancer and NAT Ga
 
 - Application Load Balancer (ALB)
 - NAT Gateways
-- Bastion hosts (if needed)
 
 ❌ **Should NOT be in Public Subnets:**
 
 - Backend application instances
 - Frontend application instances
 - Database servers
+
+**Note**: Instance access is via AWS Systems Manager Session Manager (no bastion hosts needed)
 
 ---
 
@@ -251,14 +255,14 @@ Host **application instances** that should NOT be directly accessible from the i
 
 - Flask backend instances (Auto Scaling Group)
 - React frontend instances (Auto Scaling Group)
-- Future: Database instances (in separate DB subnets)
-- Internal microservices
 
 ❌ **Should NOT be in Private Subnets:**
 
 - Load Balancers
 - NAT Gateways
 - Any resource requiring direct internet access
+
+**Note**: This application is stateless - no database or persistent storage is used. Backend forwards requests to Ollama, frontend uses localStorage only.
 
 ---
 
@@ -394,10 +398,11 @@ Private Instance → Private Route Table → NAT Gateway (in same AZ) → Intern
 
 ✅ **Typical Uses:**
 
-- `apt-get update` on backend instances
-- Docker pulling images from Docker Hub
-- Backend calling external APIs (OpenAI, AWS services)
-- CloudWatch agent sending logs/metrics
+- `apt-get update` / `yum update` on instances
+- Backend calling external APIs (Ollama service, AWS services)
+- Frontend build processes pulling dependencies
+- AWS Systems Manager agent communicating with SSM endpoints
+- Auto Scaling health checks to external endpoints
 
 ❌ **Does NOT Use NAT Gateway:**
 
@@ -543,7 +548,7 @@ resource "aws_network_acl" "backend_nacl" {
   vpc_id     = aws_vpc.ollama_vpc.id
   subnet_ids = [aws_subnet.private_subnet_1.id, aws_subnet.private_subnet_2.id]
 
-  # Allow inbound HTTP from ALB
+  # Allow inbound backend traffic from ALB
   ingress {
     protocol   = "tcp"
     rule_no    = 100
@@ -551,6 +556,16 @@ resource "aws_network_acl" "backend_nacl" {
     cidr_block = var.vpc_cidr
     from_port  = 8000
     to_port    = 8000
+  }
+
+  # Allow inbound frontend traffic from ALB
+  ingress {
+    protocol   = "tcp"
+    rule_no    = 101
+    action     = "allow"
+    cidr_block = var.vpc_cidr
+    from_port  = 3000
+    to_port    = 3000
   }
 
   # Allow inbound ephemeral ports (for return traffic)
@@ -563,14 +578,14 @@ resource "aws_network_acl" "backend_nacl" {
     to_port    = 65535
   }
 
-  # Allow SSH from within VPC
+  # Allow HTTPS for SSM Session Manager
   ingress {
     protocol   = "tcp"
     rule_no    = 120
     action     = "allow"
-    cidr_block = var.vpc_cidr
-    from_port  = 22
-    to_port    = 22
+    cidr_block = "0.0.0.0/0"
+    from_port  = 443
+    to_port    = 443
   }
 
   # Allow all outbound traffic
@@ -597,7 +612,9 @@ Provides a **subnet-level firewall** as an additional security layer beyond Secu
 
 ### Configuration Choices
 
-#### Ingress Rule 100: Backend Application Traffic
+#### Ingress Rules 100-101: Application Traffic
+
+**Rule 100: Backend Traffic**
 
 | Setting               | Value                        | Why This Value?                          |
 | --------------------- | ---------------------------- | ---------------------------------------- |
@@ -607,10 +624,20 @@ Provides a **subnet-level firewall** as an additional security layer beyond Secu
 | `cidr_block`          | `var.vpc_cidr` (10.0.0.0/16) | Only allow traffic from within VPC (ALB) |
 | `action`              | `allow`                      | Permit this traffic                      |
 
+**Rule 101: Frontend Traffic**
+
+| Setting               | Value                        | Why This Value?                          |
+| --------------------- | ---------------------------- | ---------------------------------------- |
+| `rule_no`             | `101`                        | Second priority                          |
+| `protocol`            | `tcp`                        | HTTP traffic uses TCP                    |
+| `from_port / to_port` | `3000`                       | React frontend port (Vite dev server)    |
+| `cidr_block`          | `var.vpc_cidr` (10.0.0.0/16) | Only allow traffic from within VPC (ALB) |
+| `action`              | `allow`                      | Permit this traffic                      |
+
 **Why `var.vpc_cidr`?**
 
 - Restricts access to traffic originating from ALB (in public subnets)
-- Blocks any external port 8000 traffic (even if Security Group misconfigured)
+- Blocks any external port 8000/3000 traffic (even if Security Group misconfigured)
 
 #### Ingress Rule 110: Ephemeral Ports (Return Traffic)
 
@@ -634,21 +661,22 @@ Example Flow:
 
 Without this rule, all outbound connections would fail because responses couldn't return.
 
-#### Ingress Rule 120: SSH Access
+#### Ingress Rule 120: SSM Session Manager Access
 
-| Setting               | Value                        | Why This Value?                |
-| --------------------- | ---------------------------- | ------------------------------ |
-| `rule_no`             | `120`                        | Third priority                 |
-| `protocol`            | `tcp`                        | SSH uses TCP                   |
-| `from_port / to_port` | `22`                         | Standard SSH port              |
-| `cidr_block`          | `var.vpc_cidr` (10.0.0.0/16) | Only from within VPC           |
-| `action`              | `allow`                      | Permit SSH for troubleshooting |
+| Setting               | Value       | Why This Value?                          |
+| --------------------- | ----------- | ---------------------------------------- |
+| `rule_no`             | `120`       | Fourth priority                          |
+| `protocol`            | `tcp`       | HTTPS uses TCP                           |
+| `from_port / to_port` | `443`       | HTTPS port for SSM agent communication   |
+| `cidr_block`          | `0.0.0.0/0` | SSM endpoints accessed via NAT Gateway   |
+| `action`              | `allow`     | Permit SSM Session Manager communication |
 
-**Why VPC-only SSH?**
+**Why HTTPS/443?**
 
-- Allows SSH from bastion hosts or VPN connections
-- Prevents direct SSH from internet
-- Complements Security Group rules
+- AWS Systems Manager Session Manager uses HTTPS to establish secure sessions
+- No SSH keys required - IAM-based authentication
+- More secure than SSH (encrypted via TLS, logged to CloudTrail)
+- Instances communicate with SSM endpoints over HTTPS
 
 #### Egress Rule 100: All Outbound
 
@@ -957,14 +985,37 @@ Premium for HA: $27/month (~$324/year)
 
 - **Service Discovery**: Instances can reference each other by DNS names
 - **ALB Integration**: ALB gets friendly DNS name (xxx.elb.amazonaws.com)
+- **SSM Integration**: Systems Manager uses DNS for endpoint communication
 - **CloudWatch**: Easier to identify instances in logs
-- **RDS Future**: If adding database, RDS requires DNS hostnames
 
 **Alternative Considered**: Use IPs only
 
 - **Simpler**: No DNS complexity
 - **Brittle**: IP addresses change when instances replace
 - **Verdict**: ❌ Rejected - DNS is essential for dynamic infrastructure
+
+---
+
+### 8. Why Systems Manager Instead of SSH?
+
+**Decision**: Use AWS Systems Manager Session Manager for instance access
+
+**Rationale**:
+
+- **No Key Management**: Eliminates SSH key pair creation, storage, and rotation
+- **IAM-Based Access**: Uses IAM policies for authentication/authorization
+- **Audit Trail**: All sessions logged to CloudTrail automatically
+- **No Bastion Hosts**: Saves cost and eliminates another security surface
+- **Encrypted**: Sessions encrypted via TLS
+- **Port 443 Only**: Works through firewalls (no port 22 needed)
+
+**Alternative Considered**: SSH with Bastion Host
+
+- **Traditional**: Well-understood by most engineers
+- **Key Management**: Requires distributing, rotating, and securing SSH keys
+- **Cost**: Requires bastion host instance (~$15-30/month)
+- **Security**: Another server to patch and monitor
+- **Verdict**: ❌ Rejected - SSM is more secure and simpler
 
 ---
 
@@ -1041,14 +1092,16 @@ Now that networking is established, the next infrastructure components are:
 4. Security Group allows outbound? → Check egress rules
 5. Network ACL allows ephemeral ports? → Rule 110 allows 1024-65535
 
-### Can't SSH to Instance
+### Can't Connect via Session Manager
 
 **Check:**
 
-1. Instance in private subnet? → SSH via bastion or VPN
-2. Security Group allows SSH? → Port 22 from your IP
-3. Network ACL allows SSH? → Rule 120 allows from VPC
-4. Correct key pair? → Match key used during launch
+1. Instance has IAM role? → Check `AmazonSSMManagedInstanceCore` policy attached
+2. Security Group allows HTTPS outbound? → Port 443 to 0.0.0.0/0
+3. Network ACL allows HTTPS? → Rule 120 allows port 443
+4. NAT Gateway working? → Instance needs internet to reach SSM endpoints
+5. SSM agent installed? → Pre-installed on Amazon Linux 2, Ubuntu 16.04+
+6. IAM permissions? → Your user needs `ssm:StartSession` permission
 
 ### ALB Can't Reach Backend
 
@@ -1062,6 +1115,7 @@ Now that networking is established, the next infrastructure components are:
 
 ---
 
-**Last Updated**: November 25, 2025
+**Last Updated**: November 26, 2025
 **Terraform Version**: >= 1.0
 **AWS Provider Version**: ~> 5.0
+**Architecture**: Simplified auto-scaling only (no storage, no single-instance mode)

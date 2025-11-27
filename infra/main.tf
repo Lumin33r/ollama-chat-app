@@ -221,12 +221,12 @@ resource "aws_route_table_association" "private_rta_2" {
   route_table_id = aws_route_table.private_rt_2.id
 }
 
-# Network ACL for additional security layer on Flask backend
+# Network ACL for additional security layer on application instances
 resource "aws_network_acl" "backend_nacl" {
   vpc_id     = aws_vpc.ollama_vpc.id
   subnet_ids = [aws_subnet.private_subnet_1.id, aws_subnet.private_subnet_2.id]
 
-  # Allow inbound HTTP from ALB
+  # Allow inbound backend traffic from ALB
   ingress {
     protocol   = "tcp"
     rule_no    = 100
@@ -236,24 +236,34 @@ resource "aws_network_acl" "backend_nacl" {
     to_port    = 8000
   }
 
-  # Allow inbound ephemeral ports (for return traffic)
+  # Allow inbound frontend traffic from ALB
   ingress {
     protocol   = "tcp"
     rule_no    = 110
+    action     = "allow"
+    cidr_block = var.vpc_cidr
+    from_port  = 3000
+    to_port    = 3000
+  }
+
+  # Allow inbound ephemeral ports (for return traffic)
+  ingress {
+    protocol   = "tcp"
+    rule_no    = 120
     action     = "allow"
     cidr_block = "0.0.0.0/0"
     from_port  = 1024
     to_port    = 65535
   }
 
-  # Allow SSH from within VPC
+  # Allow HTTPS outbound for Systems Manager
   ingress {
     protocol   = "tcp"
-    rule_no    = 120
+    rule_no    = 130
     action     = "allow"
-    cidr_block = var.vpc_cidr
-    from_port  = 22
-    to_port    = 22
+    cidr_block = "0.0.0.0/0"
+    from_port  = 443
+    to_port    = 443
   }
 
   # Allow all outbound traffic
@@ -393,83 +403,11 @@ resource "aws_security_group" "frontend_sg" {
   }
 }
 
-# Security Group for EC2 Instance (single-instance deployment option)
-resource "aws_security_group" "ollama_sg" {
-  name        = "${var.project_name}-sg"
-  description = "Security group for Ollama Chat App"
-  vpc_id      = aws_vpc.ollama_vpc.id
+# ========================================
+# IAM Roles and Policies
+# ========================================
 
-  # SSH access
-  ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = var.allowed_ssh_cidr
-  }
-
-  # HTTP access
-  ingress {
-    description = "HTTP"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # HTTPS access
-  ingress {
-    description = "HTTPS"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Frontend (if not behind nginx)
-  ingress {
-    description = "Frontend"
-    from_port   = 3000
-    to_port     = 3000
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Backend API (if not behind nginx)
-  ingress {
-    description = "Backend API"
-    from_port   = 8000
-    to_port     = 8000
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Ollama service (localhost only - Docker internal)
-  ingress {
-    description = "Ollama Service"
-    from_port   = 11434
-    to_port     = 11434
-    protocol    = "tcp"
-    self        = true
-  }
-
-  # Outbound traffic
-  egress {
-    description = "All outbound"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name        = "${var.project_name}-sg"
-    Environment = var.environment
-    Project     = var.project_name
-  }
-}
-
-# IAM Role for EC2 (for CloudWatch logs, SSM, etc.)
+# IAM Role for EC2 (for Systems Manager access)
 resource "aws_iam_role" "ollama_ec2_role" {
   name = "${var.project_name}-ec2-role"
 
@@ -485,138 +423,34 @@ resource "aws_iam_role" "ollama_ec2_role" {
       }
     ]
   })
-
-  tags = {
-    Name        = "${var.project_name}-ec2-role"
-    Environment = var.environment
-    Project     = var.project_name
-  }
 }
+#  tags = {
+#    Name        = "${var.project_name}-ec2-role"
+#    Environment = var.environment
+#    Project     = var.project_name
+#  }
+# }
 
-# Attach policies for SSM, CloudWatch
+# Attach Systems Manager policy for secure access
 resource "aws_iam_role_policy_attachment" "ssm_policy" {
   role       = aws_iam_role.ollama_ec2_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_role_policy_attachment" "cloudwatch_policy" {
-  role       = aws_iam_role.ollama_ec2_role.name
-  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
 }
 
 # IAM Instance Profile
 resource "aws_iam_instance_profile" "ollama_profile" {
   name = "${var.project_name}-instance-profile"
   role = aws_iam_role.ollama_ec2_role.name
-
-  tags = {
-    Name        = "${var.project_name}-instance-profile"
-    Environment = var.environment
-    Project     = var.project_name
-  }
 }
-
-# Key Pair (you need to create this manually or import existing)
-resource "aws_key_pair" "ollama_key" {
-  key_name   = "${var.project_name}-key"
-  public_key = var.ssh_public_key
-
-  tags = {
-    Name        = "${var.project_name}-key"
-    Environment = var.environment
-    Project     = var.project_name
-  }
-}
-
-# EBS Volume for Ollama models
-resource "aws_ebs_volume" "ollama_models" {
-  availability_zone = data.aws_availability_zones.available.names[0]
-  size              = var.ebs_volume_size
-  type              = "gp3"
-  encrypted         = true
-
-  tags = {
-    Name        = "${var.project_name}-models-volume"
-    Environment = var.environment
-    Project     = var.project_name
-  }
-}
-
-# EC2 Instance
-resource "aws_instance" "ollama_app" {
-  ami                    = var.ami_id
-  instance_type          = var.instance_type
-  key_name               = aws_key_pair.ollama_key.key_name
-  subnet_id              = aws_subnet.public_subnet_1.id
-  vpc_security_group_ids = [aws_security_group.ollama_sg.id]
-  iam_instance_profile   = aws_iam_instance_profile.ollama_profile.name
-
-  root_block_device {
-    volume_type           = "gp3"
-    volume_size           = var.root_volume_size
-    delete_on_termination = true
-    encrypted             = true
-  }
-
-  user_data = templatefile("${path.module}/user-data.sh", {
-    project_name = var.project_name
-    git_repo_url = var.git_repo_url
-    ollama_model = var.ollama_model
-    domain_name  = var.domain_name
-  })
-
-  metadata_options {
-    http_endpoint               = "enabled"
-    http_tokens                 = "required"
-    http_put_response_hop_limit = 1
-  }
-
-  tags = {
-    Name        = "${var.project_name}-instance"
-    Environment = var.environment
-    Project     = var.project_name
-  }
-
-  lifecycle {
-    ignore_changes = [ami]
-  }
-}
-
-# Attach EBS volume
-resource "aws_volume_attachment" "ollama_models_attach" {
-  device_name = "/dev/sdf"
-  volume_id   = aws_ebs_volume.ollama_models.id
-  instance_id = aws_instance.ollama_app.id
-}
-
-# Elastic IP (optional, for static IP)
-resource "aws_eip" "ollama_eip" {
-  instance = aws_instance.ollama_app.id
-  domain   = "vpc"
-
-  tags = {
-    Name        = "${var.project_name}-eip"
-    Environment = var.environment
-    Project     = var.project_name
-  }
-
-  depends_on = [aws_internet_gateway.ollama_igw]
-}
-
-# CloudWatch Log Group for application logs
-resource "aws_cloudwatch_log_group" "ollama_logs" {
-  name              = "/aws/ec2/${var.project_name}"
-  retention_in_days = var.log_retention_days
-
-  tags = {
-    Name        = "${var.project_name}-logs"
-    Environment = var.environment
-    Project     = var.project_name
-  }
-}
+#  tags = {
+#    Name        = "${var.project_name}-instance-profile"
+#    Environment = var.environment
+#    Project     = var.project_name
+#  }
+# }
 
 # ========================================
-# Application Load Balancer Infrastructure
+# Application Load Balancer
 # ========================================
 
 # Application Load Balancer
@@ -737,12 +571,9 @@ resource "aws_lb_listener_rule" "api_routing" {
 
 # Launch Template for Flask Backend
 resource "aws_launch_template" "backend_lt" {
-  count = var.enable_auto_scaling ? 1 : 0
-
   name_prefix   = "${var.project_name}-backend-"
   image_id      = var.ami_id
   instance_type = var.backend_instance_type
-  key_name      = aws_key_pair.ollama_key.key_name
 
   vpc_security_group_ids = [aws_security_group.backend_sg.id]
 
@@ -791,12 +622,9 @@ resource "aws_launch_template" "backend_lt" {
 
 # Launch Template for React Frontend
 resource "aws_launch_template" "frontend_lt" {
-  count = var.enable_auto_scaling ? 1 : 0
-
   name_prefix   = "${var.project_name}-frontend-"
   image_id      = var.ami_id
   instance_type = var.frontend_instance_type
-  key_name      = aws_key_pair.ollama_key.key_name
 
   vpc_security_group_ids = [aws_security_group.frontend_sg.id]
 
@@ -848,8 +676,6 @@ resource "aws_launch_template" "frontend_lt" {
 
 # Auto Scaling Group for Flask Backend
 resource "aws_autoscaling_group" "backend_asg" {
-  count = var.enable_auto_scaling ? 1 : 0
-
   name                      = "${var.project_name}-backend-asg"
   vpc_zone_identifier       = [aws_subnet.private_subnet_1.id, aws_subnet.private_subnet_2.id]
   target_group_arns         = [aws_lb_target_group.backend_tg.arn]
@@ -861,7 +687,7 @@ resource "aws_autoscaling_group" "backend_asg" {
   desired_capacity = var.backend_desired_capacity
 
   launch_template {
-    id      = aws_launch_template.backend_lt[0].id
+    id      = aws_launch_template.backend_lt.id
     version = "$Latest"
   }
 
@@ -904,8 +730,6 @@ resource "aws_autoscaling_group" "backend_asg" {
 
 # Auto Scaling Group for React Frontend
 resource "aws_autoscaling_group" "frontend_asg" {
-  count = var.enable_auto_scaling ? 1 : 0
-
   name                      = "${var.project_name}-frontend-asg"
   vpc_zone_identifier       = [aws_subnet.private_subnet_1.id, aws_subnet.private_subnet_2.id]
   target_group_arns         = [aws_lb_target_group.frontend_tg.arn]
@@ -917,7 +741,7 @@ resource "aws_autoscaling_group" "frontend_asg" {
   desired_capacity = var.frontend_desired_capacity
 
   launch_template {
-    id      = aws_launch_template.frontend_lt[0].id
+    id      = aws_launch_template.frontend_lt.id
     version = "$Latest"
   }
 
@@ -958,31 +782,29 @@ resource "aws_autoscaling_group" "frontend_asg" {
   }
 }
 
+# ========================================
+# Auto Scaling Policies
+# ========================================
+
 # Auto Scaling Policies for Backend
 resource "aws_autoscaling_policy" "backend_scale_up" {
-  count = var.enable_auto_scaling ? 1 : 0
-
   name                   = "${var.project_name}-backend-scale-up"
   scaling_adjustment     = 1
   adjustment_type        = "ChangeInCapacity"
   cooldown               = 300
-  autoscaling_group_name = aws_autoscaling_group.backend_asg[0].name
+  autoscaling_group_name = aws_autoscaling_group.backend_asg.name
 }
 
 resource "aws_autoscaling_policy" "backend_scale_down" {
-  count = var.enable_auto_scaling ? 1 : 0
-
   name                   = "${var.project_name}-backend-scale-down"
   scaling_adjustment     = -1
   adjustment_type        = "ChangeInCapacity"
   cooldown               = 300
-  autoscaling_group_name = aws_autoscaling_group.backend_asg[0].name
+  autoscaling_group_name = aws_autoscaling_group.backend_asg.name
 }
 
 # CloudWatch Alarms for Backend Scaling
 resource "aws_cloudwatch_metric_alarm" "backend_cpu_high" {
-  count = var.enable_auto_scaling ? 1 : 0
-
   alarm_name          = "${var.project_name}-backend-cpu-high"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = "2"
@@ -992,16 +814,14 @@ resource "aws_cloudwatch_metric_alarm" "backend_cpu_high" {
   statistic           = "Average"
   threshold           = "70"
   alarm_description   = "This metric monitors backend CPU utilization"
-  alarm_actions       = [aws_autoscaling_policy.backend_scale_up[0].arn]
+  alarm_actions       = [aws_autoscaling_policy.backend_scale_up.arn]
 
   dimensions = {
-    AutoScalingGroupName = aws_autoscaling_group.backend_asg[0].name
+    AutoScalingGroupName = aws_autoscaling_group.backend_asg.name
   }
 }
 
 resource "aws_cloudwatch_metric_alarm" "backend_cpu_low" {
-  count = var.enable_auto_scaling ? 1 : 0
-
   alarm_name          = "${var.project_name}-backend-cpu-low"
   comparison_operator = "LessThanThreshold"
   evaluation_periods  = "2"
@@ -1011,38 +831,32 @@ resource "aws_cloudwatch_metric_alarm" "backend_cpu_low" {
   statistic           = "Average"
   threshold           = "30"
   alarm_description   = "This metric monitors backend CPU utilization"
-  alarm_actions       = [aws_autoscaling_policy.backend_scale_down[0].arn]
+  alarm_actions       = [aws_autoscaling_policy.backend_scale_down.arn]
 
   dimensions = {
-    AutoScalingGroupName = aws_autoscaling_group.backend_asg[0].name
+    AutoScalingGroupName = aws_autoscaling_group.backend_asg.name
   }
 }
 
 # Auto Scaling Policies for Frontend
 resource "aws_autoscaling_policy" "frontend_scale_up" {
-  count = var.enable_auto_scaling ? 1 : 0
-
   name                   = "${var.project_name}-frontend-scale-up"
   scaling_adjustment     = 1
   adjustment_type        = "ChangeInCapacity"
   cooldown               = 300
-  autoscaling_group_name = aws_autoscaling_group.frontend_asg[0].name
+  autoscaling_group_name = aws_autoscaling_group.frontend_asg.name
 }
 
 resource "aws_autoscaling_policy" "frontend_scale_down" {
-  count = var.enable_auto_scaling ? 1 : 0
-
   name                   = "${var.project_name}-frontend-scale-down"
   scaling_adjustment     = -1
   adjustment_type        = "ChangeInCapacity"
   cooldown               = 300
-  autoscaling_group_name = aws_autoscaling_group.frontend_asg[0].name
+  autoscaling_group_name = aws_autoscaling_group.frontend_asg.name
 }
 
 # CloudWatch Alarms for Frontend Scaling
 resource "aws_cloudwatch_metric_alarm" "frontend_cpu_high" {
-  count = var.enable_auto_scaling ? 1 : 0
-
   alarm_name          = "${var.project_name}-frontend-cpu-high"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = "2"
@@ -1052,16 +866,14 @@ resource "aws_cloudwatch_metric_alarm" "frontend_cpu_high" {
   statistic           = "Average"
   threshold           = "70"
   alarm_description   = "This metric monitors frontend CPU utilization"
-  alarm_actions       = [aws_autoscaling_policy.frontend_scale_up[0].arn]
+  alarm_actions       = [aws_autoscaling_policy.frontend_scale_up.arn]
 
   dimensions = {
-    AutoScalingGroupName = aws_autoscaling_group.frontend_asg[0].name
+    AutoScalingGroupName = aws_autoscaling_group.frontend_asg.name
   }
 }
 
 resource "aws_cloudwatch_metric_alarm" "frontend_cpu_low" {
-  count = var.enable_auto_scaling ? 1 : 0
-
   alarm_name          = "${var.project_name}-frontend-cpu-low"
   comparison_operator = "LessThanThreshold"
   evaluation_periods  = "2"
@@ -1071,9 +883,9 @@ resource "aws_cloudwatch_metric_alarm" "frontend_cpu_low" {
   statistic           = "Average"
   threshold           = "30"
   alarm_description   = "This metric monitors frontend CPU utilization"
-  alarm_actions       = [aws_autoscaling_policy.frontend_scale_down[0].arn]
+  alarm_actions       = [aws_autoscaling_policy.frontend_scale_down.arn]
 
   dimensions = {
-    AutoScalingGroupName = aws_autoscaling_group.frontend_asg[0].name
+    AutoScalingGroupName = aws_autoscaling_group.frontend_asg.name
   }
 }
