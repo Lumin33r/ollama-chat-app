@@ -407,46 +407,37 @@ resource "aws_security_group" "frontend_sg" {
 # IAM Roles and Policies
 # ========================================
 
-# IAM Role for EC2 (for Systems Manager access)
-resource "aws_iam_role" "ollama_ec2_role" {
-  name = "${var.project_name}-ec2-role"
+# NOTE: IAM resources removed due to insufficient IAM permissions
+# User does not have iam:ListRolePolicies permission required by Terraform
+#
+# Trade-off: Instances will not have AWS Systems Manager Session Manager access
+# Alternative: Use SSH key pairs for instance access if needed
+#
+# To re-enable SSM access, admin needs to:
+# 1. Grant user iam:ListRolePolicies, iam:TagRole, iam:DeleteRole permissions
+# 2. Uncomment IAM resources below
+# 3. Uncomment iam_instance_profile blocks in launch templates
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      }
-    ]
-  })
-}
-#  tags = {
-#    Name        = "${var.project_name}-ec2-role"
-#    Environment = var.environment
-#    Project     = var.project_name
-#  }
+# resource "aws_iam_role" "ollama_ec2_role" {
+#   name = "${var.project_name}-ec2-role"
+#   assume_role_policy = jsonencode({
+#     Version = "2012-10-17"
+#     Statement = [{
+#       Action = "sts:AssumeRole"
+#       Effect = "Allow"
+#       Principal = { Service = "ec2.amazonaws.com" }
+#     }]
+#   })
 # }
 
-# Attach Systems Manager policy for secure access
-resource "aws_iam_role_policy_attachment" "ssm_policy" {
-  role       = aws_iam_role.ollama_ec2_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
+# resource "aws_iam_role_policy_attachment" "ssm_policy" {
+#   role       = aws_iam_role.ollama_ec2_role.name
+#   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+# }
 
-# IAM Instance Profile
-resource "aws_iam_instance_profile" "ollama_profile" {
-  name = "${var.project_name}-instance-profile"
-  role = aws_iam_role.ollama_ec2_role.name
-}
-#  tags = {
-#    Name        = "${var.project_name}-instance-profile"
-#    Environment = var.environment
-#    Project     = var.project_name
-#  }
+# resource "aws_iam_instance_profile" "ollama_profile" {
+#   name = "${var.project_name}-instance-profile"
+#   role = aws_iam_role.ollama_ec2_role.name
 # }
 
 # ========================================
@@ -577,9 +568,11 @@ resource "aws_launch_template" "backend_lt" {
 
   vpc_security_group_ids = [aws_security_group.backend_sg.id]
 
-  iam_instance_profile {
-    name = aws_iam_instance_profile.ollama_profile.name
-  }
+  # IAM instance profile removed - insufficient IAM permissions
+  # Instances will not have SSM Session Manager access
+  # iam_instance_profile {
+  #   name = aws_iam_instance_profile.ollama_profile.name
+  # }
 
   block_device_mappings {
     device_name = "/dev/sda1"
@@ -628,9 +621,11 @@ resource "aws_launch_template" "frontend_lt" {
 
   vpc_security_group_ids = [aws_security_group.frontend_sg.id]
 
-  iam_instance_profile {
-    name = aws_iam_instance_profile.ollama_profile.name
-  }
+  # IAM instance profile removed - insufficient IAM permissions
+  # Instances will not have SSM Session Manager access
+  # iam_instance_profile {
+  #   name = aws_iam_instance_profile.ollama_profile.name
+  # }
 
   block_device_mappings {
     device_name = "/dev/sda1"

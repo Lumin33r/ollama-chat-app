@@ -137,15 +137,16 @@ output "frontend_security_group_id" {
 # IAM Outputs
 # ========================================
 
-output "ec2_iam_role_arn" {
-  description = "The ARN of the EC2 IAM role"
-  value       = aws_iam_role.ollama_ec2_role.arn
-}
+# IAM outputs removed - IAM resources not created due to insufficient permissions
+# output "ec2_iam_role_arn" {
+#   description = "The ARN of the EC2 IAM role"
+#   value       = aws_iam_role.ollama_ec2_role.arn
+# }
 
-output "ec2_instance_profile_name" {
-  description = "The name of the EC2 instance profile"
-  value       = aws_iam_instance_profile.ollama_profile.name
-}
+# output "ec2_instance_profile_name" {
+#   description = "The name of the EC2 instance profile"
+#   value       = aws_iam_instance_profile.ollama_profile.name
+# }
 
 # ========================================
 # Deployment Instructions
@@ -175,8 +176,11 @@ output "deployment_instructions" {
 
     INSTANCE ACCESS:
     ----------------
-    Use AWS Systems Manager Session Manager to connect to instances
-    No SSH keys required - IAM-based access via SSM
+    ⚠️  No IAM role configured - SSM Session Manager NOT available
+    Access via SSH requires:
+      1. Add key_name to launch templates
+      2. Create bastion host in public subnet
+      3. Configure security groups for SSH access (port 22)
 
     INFRASTRUCTURE DETAILS:
     -----------------------

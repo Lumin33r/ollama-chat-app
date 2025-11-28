@@ -1,7 +1,7 @@
 variable "aws_region" {
   description = "AWS region"
   type        = string
-  default     = "us-east-1"
+  default     = "us-west-2"
 }
 
 variable "project_name" {
@@ -19,7 +19,7 @@ variable "environment" {
 variable "ami_id" {
   description = "AMI ID for EC2 instances"
   type        = string
-  default     = "ami-0f00d706c4a80fd93"
+  default     = "ami-0c5f78ca5e1169a1a"
 }
 
 variable "vpc_cidr" {
