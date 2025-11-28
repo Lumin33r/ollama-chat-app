@@ -3,7 +3,7 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
-    background-color: rgb(190, 215, 230);
+    background-color: rgb(89, 177, 232);
 }
 
 .chat-header {
@@ -51,7 +51,7 @@
 }
 
 .new-chat-header-button:hover {
-    background-color: #0d8a6b;
+    background-color: #0d228a;
 }
 
 .messages-container {
@@ -88,7 +88,7 @@
 }
 
 .message.user .message-avatar {
-    background-color: #1bb7e2;
+    background-color: #781be2;
     color: white;
 }
 
@@ -122,7 +122,7 @@
 }
 
 .message.user .message-text {
-    background-color: #10a37f;
+    background-color: #6110a3;
     color: white;
 }
 
@@ -199,7 +199,7 @@
 }
 
 .welcome-content svg {
-    color: #10a37f;
+    color: #104da3;
     margin-bottom: 24px;
 }
 
@@ -269,7 +269,7 @@
 }
 
 .message-input:focus {
-    border-color: #10a37f;
+    border-color: #354ec9;
 }
 
 .message-input:disabled {
@@ -278,7 +278,7 @@
 }
 
 .send-button {
-    background-color: #10a37f;
+    background-color: #460abe;
     color: white;
     border: none;
     border-radius: 8px;
