@@ -19,17 +19,8 @@ ENV VITE_API_URL=$VITE_API_URL
 # Build React app
 RUN npm run build || (echo "Build failed, retrying..." && rm -rf node_modules && npm install && npm run build)
 
-# Production stage
-FROM nginx:stable-alpine
+# Expose Vite preview port
+EXPOSE 4173
 
-# Copy built files
-COPY --from=builder /src/dist /usr/share/nginx/html
-
-# Copy nginx configuration
-COPY nginx.conf /etc/nginx/nginx.conf
-
-# Expose port
-EXPOSE 80
-
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"]
+# Serve the built app with Vite preview
+CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "4173"]

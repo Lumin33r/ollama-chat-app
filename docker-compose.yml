@@ -63,9 +63,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: ollama-frontend
+    container_name: ollama-frontend-prod
     ports:
-      - "3000:3000"
+      - "3000:80"
     environment:
       VITE_API_URL: http://localhost:8000
     depends_on:
